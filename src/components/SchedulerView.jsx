@@ -3,7 +3,7 @@ import { supabase } from '../supabaseClient'
 import { Plus, X, Save, ChevronLeft, ChevronRight } from 'lucide-react'
 import { buildTechnicianPayload, getTaskCardTitle, getTaskMutationErrorMessage, getTaskTechnicianIds } from '../utils/taskUtils'
 
-export default function SchedulerView() {
+export default function SchedulerView({ currentUser, currentUserRole = 'technik' }) {
   const [tasks, setTasks] = useState([])
   const [technicians, setTechnicians] = useState([])
   const [clients, setClients] = useState([])
@@ -25,6 +25,7 @@ export default function SchedulerView() {
   const [durationHours, setDurationHours] = useState('')
 
   const [filteredCategoriesForForm, setFilteredCategoriesForForm] = useState([])
+  const userRole = currentUserRole
 
   const getWeekNumber = (d) => {
     const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()))
@@ -138,7 +139,7 @@ export default function SchedulerView() {
     setTicketNumber('')
     setDurationHours('')
     setTaskDate(dateStr)
-    setSelectedTechIds(initialTechId ? [initialTechId] : [])
+    setSelectedTechIds(userRole === 'technik' && currentUser?.id ? [currentUser.id] : (initialTechId ? [initialTechId] : []))
     setShowModal(true)
   }
 
@@ -156,13 +157,22 @@ export default function SchedulerView() {
 
   const handleCreateTask = async (e) => {
     e.preventDefault()
+    const technicianTaskPayload = {
+      title,
+      description,
+      ...buildTechnicianPayload(currentUser?.id ? [currentUser.id] : []),
+      start_date: taskDate,
+      end_date: taskDate,
+      status: 'Do realizacji',
+    }
+    const pmTaskPayload = {
+      title, client_id: clientId ? Number(clientId) : null, category_id: categoryId ? Number(categoryId) : null,
+      ...buildTechnicianPayload(selectedTechIds), start_date: taskDate, end_date: taskDate,
+      client_name: clientId ? clients.find(c => c.id === Number(clientId))?.name : null, description,
+      ticket_number: ticketNumber.trim() || null, duration_hours: durationHours ? Number(durationHours) : null
+    }
     const { error } = await supabase.from('tasks').insert([
-      {
-        title, client_id: clientId ? Number(clientId) : null, category_id: categoryId ? Number(categoryId) : null,
-        ...buildTechnicianPayload(selectedTechIds), start_date: taskDate, end_date: taskDate,
-        client_name: clientId ? clients.find(c => c.id === Number(clientId))?.name : null, description,
-        ticket_number: ticketNumber.trim() || null, duration_hours: durationHours ? Number(durationHours) : null
-      }
+      userRole === 'technik' ? technicianTaskPayload : pmTaskPayload
     ])
     if (error) {
       alert(getTaskMutationErrorMessage(error))
@@ -174,12 +184,13 @@ export default function SchedulerView() {
 
   const handleUpdateTask = async (e) => {
     e.preventDefault()
-    const { error } = await supabase.from('tasks').update({
+    const updatePayload = userRole === 'technik' ? { title, description } : {
       title, client_id: clientId ? Number(clientId) : null, category_id: categoryId ? Number(categoryId) : null,
       ...buildTechnicianPayload(selectedTechIds), start_date: taskDate, end_date: taskDate,
       client_name: clientId ? clients.find(c => c.id === Number(clientId))?.name : null, description,
       ticket_number: ticketNumber.trim() || null, duration_hours: durationHours ? Number(durationHours) : null
-    }).eq('id', selectedTask.id)
+    }
+    const { error } = await supabase.from('tasks').update(updatePayload).eq('id', selectedTask.id)
     if (error) {
       alert(getTaskMutationErrorMessage(error))
       return
@@ -206,6 +217,7 @@ export default function SchedulerView() {
   }
 
   const handleMoveTask = async (taskId, newTechId, newDate) => {
+    if (userRole === 'technik') return
     const { error } = await supabase.from('tasks').update({ ...buildTechnicianPayload(newTechId === 'unassigned' ? [] : [newTechId]), start_date: newDate, end_date: newDate }).eq('id', taskId)
     if (error) {
       alert(getTaskMutationErrorMessage(error))
@@ -240,7 +252,7 @@ export default function SchedulerView() {
     const cat = clientCategories.find(c => c.id === task.category_id)
     const isDone = task.status === 'Zrealizowane'
     return (
-      <div draggable onDragStart={e => e.dataTransfer.setData('text/plain', task.id)} onClick={(e) => { e.stopPropagation(); handleOpenDetails(task); }} onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setContextMenu({ x: e.clientX, y: e.clientY, task }) }} className={`${isDone ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-blue-600 hover:bg-blue-700'} text-white text-xs p-2 rounded shadow font-bold cursor-grab active:cursor-grabbing text-left space-y-1.5 transition`}>
+      <div draggable={userRole !== 'technik'} onDragStart={e => e.dataTransfer.setData('text/plain', task.id)} onClick={(e) => { e.stopPropagation(); handleOpenDetails(task); }} onContextMenu={e => { e.preventDefault(); e.stopPropagation(); if (userRole !== 'technik') setContextMenu({ x: e.clientX, y: e.clientY, task }) }} className={`${isDone ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-blue-600 hover:bg-blue-700'} text-white text-xs p-2 rounded shadow font-bold ${userRole === 'technik' ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'} text-left space-y-1.5 transition w-[190px] max-w-[190px] mx-auto`}>
         <div className="flex items-center gap-1.5">
           <input
             type="checkbox"
@@ -278,7 +290,7 @@ export default function SchedulerView() {
           <p className="text-sm text-slate-500">Przełączaj tygodnie, aby planować obsadę z wyprzedzeniem</p>
         </div>
         
-        <div className="flex items-center space-x-2 w-full sm:w-auto justify-end">
+        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto justify-end">
           <button onClick={handlePrevWeek} className="p-2 bg-slate-100 hover:bg-slate-200 rounded-lg text-slate-700 transition"><ChevronLeft size={18} /></button>
           <button onClick={() => setCurrentDate(new Date())} className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg text-sm font-bold text-slate-700 transition">Bieżący tydzień</button>
           <button onClick={handleNextWeek} className="p-2 bg-slate-100 hover:bg-slate-200 rounded-lg text-slate-700 transition"><ChevronRight size={18} /></button>
@@ -290,15 +302,15 @@ export default function SchedulerView() {
 
       <div className="bg-white rounded-xl shadow-md border border-slate-200 overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
+          <table className="min-w-[1180px] table-fixed text-left border-collapse">
             <thead>
               <tr className="bg-slate-100 border-b text-xs font-semibold uppercase">
-                <th className="p-3 w-48 border-r text-slate-700">Obsada zespołu</th>
+                <th className="p-3 w-[210px] border-r text-slate-700">Obsada zespołu</th>
                 {weekDays.map((d, i) => {
                   const isTodayStr = new Date().toISOString().split('T')[0] === d
                   const isEnd = isWeekend(d)
                   return (
-                    <th key={i} className={`p-3 text-center border-r min-w-[130px] ${isTodayStr ? 'bg-blue-50 text-blue-700 font-black' : 'text-slate-600'} ${isEnd && !isTodayStr ? 'bg-slate-100 text-red-600 font-bold' : ''}`}>
+                    <th key={i} className={`p-3 text-center border-r w-[138px] ${isTodayStr ? 'bg-blue-50 text-blue-700 font-black' : 'text-slate-600'} ${isEnd && !isTodayStr ? 'bg-slate-100 text-red-600 font-bold' : ''}`}>
                       {d} {isTodayStr && '📍'} {isEnd && '⛺'}
                     </th>
                   )
@@ -307,7 +319,7 @@ export default function SchedulerView() {
             </thead>
             <tbody className="divide-y text-sm">
               {/* RZĘDY TECHNIKÓW */}
-              {technicians.map(tech => (
+              {technicians.filter(tech => userRole === 'pm' || tech.id === currentUser?.id).map(tech => (
                 <tr key={tech.id} className="hover:bg-slate-50/30 transition">
                   <td className="p-3 font-medium text-slate-900 bg-slate-50 border-r">{tech.full_name}</td>
                   {weekDays.map((dateStr, idx) => {
@@ -316,7 +328,7 @@ export default function SchedulerView() {
                     return (
                       <td 
                         key={idx} 
-                        onClick={() => { if(!task) handleOpenCreateModal(dateStr, tech.id) }} // KLIKNIĘCIE W TŁO KOMÓRKI OTWUERA MODAL
+                        onClick={() => { if(!task) handleOpenCreateModal(dateStr, tech.id) }}
                         onDragOver={e => e.preventDefault()} 
                         onDrop={e => { e.stopPropagation(); const id = e.dataTransfer.getData('text/plain'); if(id) handleMoveTask(id, tech.id, dateStr) }} 
                         className={`p-2 border-r text-center h-24 transition duration-200 relative group cursor-pointer ${isEnd ? 'bg-slate-100/60' : 'bg-slate-50/5'} hover:bg-blue-50/40`}
@@ -336,7 +348,7 @@ export default function SchedulerView() {
               <tr className="bg-orange-50/50 border-t-2 border-slate-300">
                 <td className="p-3 font-black text-orange-700 bg-orange-100/60 border-r">⚠️ Nieprzypisane</td>
                 {weekDays.map((dateStr, idx) => {
-                  const dayUnassignedTasks = tasks.filter(t => getTaskTechnicianIds(t).length === 0 && t.start_date.startsWith(dateStr))
+                  const dayUnassignedTasks = userRole === 'pm' ? tasks.filter(t => getTaskTechnicianIds(t).length === 0 && t.start_date.startsWith(dateStr)) : []
                   const isEnd = isWeekend(dateStr)
                   return (
                     <td 
@@ -378,40 +390,49 @@ export default function SchedulerView() {
             <h3 className="text-base font-black text-slate-900 border-b pb-2">{selectedTask ? 'Modyfikacja zlecenia' : 'Nowe zlecenie'}</h3>
             <form onSubmit={selectedTask ? handleUpdateTask : handleCreateTask} className="space-y-3">
               <div><label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Nazwa zadania / System</label><input type="text" required value={title} onChange={e => setTitle(e.target.value)} className="w-full p-2 border rounded text-sm" /></div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Klient</label>
-                  <select value={clientId} onChange={e => { setClientId(e.target.value); setCategoryId(''); setDurationHours(''); }} className="w-full p-2 border bg-white rounded text-sm"><option value="">-- Brak --</option>{clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
-                </div>
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Kategoria</label>
-                  <select value={categoryId} onChange={e => handleCategoryChange(e.target.value)} disabled={!clientId} className="w-full p-2 border bg-white rounded text-sm">{filteredCategoriesForForm.map(cat => <option key={cat.id} value={cat.id}>{cat.name}</option>)}</select>
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div><label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Numer ticketu SD</label><input type="text" value={ticketNumber} onChange={e => setTicketNumber(e.target.value)} className="w-full p-2 border rounded text-sm" placeholder="np. 5053052" /></div>
-                <div><label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Czasochłonność (h)</label><input type="number" min="1" value={durationHours} onChange={e => setDurationHours(e.target.value)} className="w-full p-2 border rounded text-sm" /></div>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div><label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Data</label><input type="date" required value={taskDate} onChange={e => setTaskDate(e.target.value)} className="w-full p-2 border rounded text-sm" /></div>
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Przypisz techników</label>
-                  <div className="grid grid-cols-1 gap-1 max-h-24 overflow-y-auto border rounded p-2 bg-white">
-                    {technicians.map(t => (
-                      <label key={t.id} className="flex items-center gap-2 text-xs font-semibold text-slate-700">
-                        <input
-                          type="checkbox"
-                          checked={selectedTechIds.includes(t.id)}
-                          onChange={() => toggleTechnician(t.id)}
-                          className="h-4 w-4 rounded border-slate-300"
-                        />
-                        <span className="truncate">{t.full_name}</span>
-                      </label>
-                    ))}
-                    {technicians.length === 0 && <span className="text-xs text-slate-400">Brak techników w bazie.</span>}
+              {userRole === 'pm' && (
+                <>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Klient</label>
+                      <select value={clientId} onChange={e => { setClientId(e.target.value); setCategoryId(''); setDurationHours(''); }} className="w-full p-2 border bg-white rounded text-sm"><option value="">-- Brak --</option>{clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Kategoria</label>
+                      <select value={categoryId} onChange={e => handleCategoryChange(e.target.value)} disabled={!clientId} className="w-full p-2 border bg-white rounded text-sm">{filteredCategoriesForForm.map(cat => <option key={cat.id} value={cat.id}>{cat.name}</option>)}</select>
+                    </div>
                   </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div><label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Numer ticketu SD</label><input type="text" value={ticketNumber} onChange={e => setTicketNumber(e.target.value)} className="w-full p-2 border rounded text-sm" placeholder="np. 5053052" /></div>
+                    <div><label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Czasochłonność (h)</label><input type="number" min="1" value={durationHours} onChange={e => setDurationHours(e.target.value)} className="w-full p-2 border rounded text-sm" /></div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div><label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Data</label><input type="date" required value={taskDate} onChange={e => setTaskDate(e.target.value)} className="w-full p-2 border rounded text-sm" /></div>
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Przypisz techników</label>
+                      <div className="grid grid-cols-1 gap-1 max-h-24 overflow-y-auto border rounded p-2 bg-white">
+                        {technicians.map(t => (
+                          <label key={t.id} className="flex items-center gap-2 text-xs font-semibold text-slate-700">
+                            <input
+                              type="checkbox"
+                              checked={selectedTechIds.includes(t.id)}
+                              onChange={() => toggleTechnician(t.id)}
+                              className="h-4 w-4 rounded border-slate-300"
+                            />
+                            <span className="truncate">{t.full_name}</span>
+                          </label>
+                        ))}
+                        {technicians.length === 0 && <span className="text-xs text-slate-400">Brak techników w bazie.</span>}
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+              {userRole === 'technik' && (
+                <div className="bg-slate-50 border rounded p-2 text-xs font-semibold text-slate-600">
+                  Nowe zadanie zostanie przypisane do Ciebie na dzień {taskDate}.
                 </div>
-              </div>
+              )}
               <div><label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Uwagi</label><textarea value={description} onChange={e => setDescription(e.target.value)} rows="2" className="w-full p-2 border rounded text-sm" /></div>
               <div className="flex justify-end space-x-2 pt-2 border-t">
                 {selectedTask && <button type="button" onClick={() => handleDeleteTask(selectedTask.id)} className="mr-auto px-3 py-2 bg-red-50 text-red-600 rounded text-xs font-bold">Usuń</button>}

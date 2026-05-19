@@ -5,14 +5,19 @@ import * as XLSX from 'xlsx'
 import TaskModal from './TaskModal'
 import { formatDateLocal, getTaskCardTitle, getTaskEndDate, getTaskMutationErrorMessage, getTaskStartDate, getTaskTechnicianIds, getTechnicianLabel } from '../utils/taskUtils'
 
-export default function MonthView() {
+export default function MonthView({ currentUser: authUser, currentUserRole = 'technik' }) {
   const [tasks, setTasks] = useState([])
   const [technicians, setTechnicians] = useState([])
   const [clients, setClients] = useState([])
   const [clientCategories, setClientCategories] = useState([])
   
-  const [userRole, setUserRole] = useState('pm')
-  const [currentUser, setCurrentUser] = useState(null)
+  const [userRole, setUserRole] = useState(currentUserRole)
+  const [currentUser, setCurrentUser] = useState(authUser ? {
+    id: authUser.id,
+    email: authUser.email,
+    fullName: authUser.email,
+    role: currentUserRole,
+  } : null)
   const [selectedViewClientIds, setSelectedViewClientIds] = useState([])
   const [activeTechFilterId, setActiveTechFilterId] = useState('')
 
@@ -32,6 +37,18 @@ export default function MonthView() {
     fetchClientCategories()
     checkCurrentUser()
   }, [currentDate])
+
+  useEffect(() => {
+    setUserRole(currentUserRole)
+    if (authUser) {
+      setCurrentUser(prev => ({
+        id: authUser.id,
+        email: authUser.email,
+        fullName: prev?.fullName || authUser.email,
+        role: currentUserRole,
+      }))
+    }
+  }, [authUser, currentUserRole])
 
   useEffect(() => {
     if (!currentUser?.id) return
@@ -105,7 +122,18 @@ export default function MonthView() {
     } else {
       // Dodawanie nowego zlecenia
       const clientName = payload.client_id ? clients.find(c => Number(c.id) === payload.client_id)?.name : null
-      result = await supabase.from('tasks').insert([{ ...payload, client_name: clientName }])
+      const insertData = userRole === 'technik'
+        ? {
+            title: payload.title,
+            description: payload.description,
+            status: payload.status,
+            start_date: payload.start_date,
+            end_date: payload.end_date,
+            technik_id: currentUser?.id || null,
+            technician_ids: currentUser?.id ? [currentUser.id] : [],
+          }
+        : { ...payload, client_name: clientName }
+      result = await supabase.from('tasks').insert([insertData])
     }
 
     if (result?.error) {
@@ -197,6 +225,7 @@ export default function MonthView() {
   }
 
   const isTaskVisible = (task) => {
+    if (userRole === 'technik' && currentUser?.id && !getTaskTechnicianIds(task).includes(currentUser.id)) return false
     if (selectedViewClientIds.length > 0 && !selectedViewClientIds.includes(Number(task.client_id))) return false
     if (activeTechFilterId && !getTaskTechnicianIds(task).includes(activeTechFilterId)) return false
     return true
@@ -326,9 +355,16 @@ export default function MonthView() {
 
   const handleExportToExcel = () => {
     const currentMonthStr = `${year}-${String(month + 1).padStart(2, '0')}`
-    const filteredTasks = tasks.filter(t => t.start_date.includes(currentMonthStr))
+    const filteredTasks = tasks.filter(t => t.start_date.includes(currentMonthStr)).filter(isTaskVisible)
     const excelRows = filteredTasks.map(t => ({
-      'ID (ServiceDesk)': t.ticket_number || '', 'Klient': t.client_name || 'Brak', 'Zadanie': t.title, 'Lokalizacja': t.description || '', 'Status': t.status || 'Do realizacji', 'Start': t.start_date, 'Koniec': t.end_date
+      'ID (ServiceDesk)': t.ticket_number || '',
+      'Klient': t.client_name || 'Brak',
+      'Zadanie': t.title,
+      'Lokalizacja': t.description || '',
+      'Czasochłonność (h)': t.duration_hours || '',
+      'Status': t.status || 'Do realizacji',
+      'Start': t.start_date,
+      'Koniec': t.end_date
     }))
     const worksheet = XLSX.utils.json_to_sheet(excelRows)
     const workbook = XLSX.utils.book_new()
@@ -381,9 +417,10 @@ export default function MonthView() {
   const monthNames = ["Styczeń", "Luty", "Marzec", "Kwiecień", "Maj", "Czerwiec", "Lipiec", "Sierpień", "Wrzesień", "Październik", "Listopad", "Grudzień"]
 
   return (
-    <div className="grid grid-cols-1 xl:grid-cols-5 gap-6 items-start font-sans">
+    <div className="grid grid-cols-1 xl:grid-cols-5 gap-4 sm:gap-6 items-start font-sans min-w-0">
       
       {/* PANEL FILTRÓW BOCZNYCH */}
+      {userRole === 'pm' && (
       <div className="bg-white rounded-xl shadow-md border border-slate-200 xl:col-span-1 overflow-hidden select-none">
         <div className="p-4 bg-slate-900 text-white flex items-center space-x-2">
           <Building2 size={16} className="text-blue-400" />
@@ -409,11 +446,12 @@ export default function MonthView() {
           ))}
         </div>
       </div>
+      )}
 
       {/* KALENDARZ */}
-      <div className="xl:col-span-4 space-y-4">
+      <div className={`${userRole === 'pm' ? 'xl:col-span-4' : 'xl:col-span-5'} space-y-4 min-w-0`}>
         {userRole !== 'technik' && (
-          <div className="bg-white p-4 rounded-xl shadow-md border border-slate-200 flex items-center justify-between select-none">
+          <div className="bg-white p-4 rounded-xl shadow-md border border-slate-200 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between select-none">
             <div>
               <h4 className="text-sm font-black text-slate-900">Masowe ładowanie zgłoszeń</h4>
               <p className="text-[11px] text-slate-500">Przerzuć kafelek metodą przeciągnij i upuść (Drag&Drop) na dowolną komórkę kalendarza.</p>
@@ -423,16 +461,16 @@ export default function MonthView() {
           </div>
         )}
 
-        <div className="flex items-center justify-between bg-white p-4 rounded-xl shadow-md border border-slate-200 select-none">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between bg-white p-4 rounded-xl shadow-md border border-slate-200 select-none">
           <div>
             <h2 className="text-2xl font-black text-slate-900">{monthNames[month]} <span className="text-blue-600 font-normal">{year}</span></h2>
             <p className="text-[11px] font-bold text-slate-500">
               Zalogowany: {currentUser?.fullName || currentUser?.email || 'Użytkownik'} · {userRole}
             </p>
           </div>
-          <div className="flex items-center space-x-2">
+          <div className="flex flex-wrap items-center gap-2">
             {userRole !== 'technik' && <button type="button" onClick={handleExportToExcel} className="px-3 py-1.5 border bg-blue-50 text-blue-700 font-bold text-xs rounded-lg flex items-center space-x-1.5"><Download size={14} /><span>Eksportuj</span></button>}
-            <select value={activeTechFilterId} onChange={(e) => setActiveTechFilterId(e.target.value)} className="border rounded-lg px-2 py-1.5 text-xs font-bold text-slate-700 outline-none"><option value="">👤 Wszyscy technicy</option>{technicians.map(t => <option key={t.id} value={t.id}>{t.full_name}</option>)}</select>
+            {userRole === 'pm' && <select value={activeTechFilterId} onChange={(e) => setActiveTechFilterId(e.target.value)} className="border rounded-lg px-2 py-1.5 text-xs font-bold text-slate-700 outline-none"><option value="">Wszyscy technicy</option>{technicians.map(t => <option key={t.id} value={t.id}>{t.full_name}</option>)}</select>}
             <div className="flex items-center space-x-1">
               <button type="button" onClick={() => setCurrentDate(new Date(year, month - 1, 1))} className="p-2 bg-slate-100 rounded-lg">◀</button>
               <button type="button" onClick={() => setCurrentDate(new Date())} className="px-3 py-1.5 bg-slate-100 text-xs font-bold rounded-lg">Dzisiaj</button>
@@ -442,7 +480,8 @@ export default function MonthView() {
         </div>
 
         {/* SIATKA KALENDARZA */}
-        <div className="bg-white rounded-xl shadow-md border border-slate-200 overflow-hidden">
+        <div className="bg-white rounded-xl shadow-md border border-slate-200 overflow-x-auto">
+          <div className="min-w-[860px]">
           <div className="grid grid-cols-7 bg-slate-100 border-b text-center py-2 text-xs font-bold text-slate-600 uppercase select-none">
             {["Pn", "Wt", "Śr", "Cz", "Pt", "Sb", "Nd"].map((d, i) => <div key={i} className={i >= 5 ? "text-red-500" : ""}>{d}</div>)}
           </div>
@@ -496,6 +535,7 @@ export default function MonthView() {
               )
             })}
           </div>
+          </div>
         </div>
       </div>
 
@@ -505,6 +545,7 @@ export default function MonthView() {
         onClose={() => { setModalOpen(false); setCurrentActiveTask(null); }}
         selectedTask={currentActiveTask}
         userRole={userRole}
+        currentUserId={currentUser?.id}
         clients={clients}
         technicians={technicians}
         clientCategories={clientCategories}

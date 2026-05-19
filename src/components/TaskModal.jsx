@@ -7,6 +7,7 @@ export default function TaskModal({
   onClose, 
   selectedTask, 
   userRole, 
+  currentUserId,
   clients, 
   technicians, 
   clientCategories, 
@@ -28,10 +29,11 @@ export default function TaskModal({
 
   useEffect(() => {
     if (isOpen) {
+      const isNewTechnicianTask = userRole === 'technik' && !selectedTask?.id
       setTitle(selectedTask?.title || '')
       setClientId(selectedTask?.client_id ? selectedTask.client_id.toString() : '')
       setCategoryId(selectedTask?.category_id ? selectedTask.category_id.toString() : '')
-      setSelectedTechIds(getTaskTechnicianIds(selectedTask))
+      setSelectedTechIds(isNewTechnicianTask && currentUserId ? [currentUserId] : getTaskTechnicianIds(selectedTask))
       setStartDate(selectedTask?.start_date ? selectedTask.start_date.split('T')[0] : '')
       setEndDate(selectedTask?.end_date ? selectedTask.end_date.split('T')[0] : (selectedTask?.start_date ? selectedTask.start_date.split('T')[0] : ''))
       setDescription(selectedTask?.description || '')
@@ -39,7 +41,7 @@ export default function TaskModal({
       setDurationHours(selectedTask?.duration_hours ? selectedTask.duration_hours.toString() : '')
       setTaskStatus(selectedTask?.status || 'Do realizacji')
     }
-  }, [isOpen, selectedTask])
+  }, [isOpen, selectedTask, userRole, currentUserId])
 
   useEffect(() => {
     if (clientId && clientCategories) {
@@ -50,6 +52,8 @@ export default function TaskModal({
   }, [clientId, clientCategories])
 
   if (!isOpen) return null
+  const isTechnician = userRole === 'technik'
+  const isExistingTask = !!selectedTask?.id
 
   const toggleTechnician = (technicianId) => {
     setSelectedTechIds(prev => (
@@ -105,35 +109,51 @@ export default function TaskModal({
           ) : (
             <div className="space-y-3">
               <div><label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Nazwa zadania / Opis</label><input type="text" required value={title} onChange={e => setTitle(e.target.value)} className="w-full p-2 border rounded text-sm" /></div>
-              <div className="grid grid-cols-2 gap-3">
-                <div><label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Klient</label><select value={clientId} onChange={e => setClientId(e.target.value)} className="w-full p-2 border bg-white rounded text-sm"><option value="">-- Brak --</option>{clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
-                <div><label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Kategoria</label><select value={categoryId} onChange={e => setCategoryId(e.target.value)} disabled={!clientId} className="w-full p-2 border bg-white rounded text-sm"><option value="">-- Brak --</option>{filteredCategoriesForForm.map(cat => <option key={cat.id} value={cat.id}>{cat.name}</option>)}</select></div>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div><label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Numer ticketu SD</label><input type="text" value={ticketNumber} onChange={e => setTicketNumber(e.target.value)} className="w-full p-2 border rounded text-sm" /></div>
-                <div><label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Czasochłonność (h)</label><input type="number" min="1" value={durationHours} onChange={e => setDurationHours(e.target.value)} className="w-full p-2 border rounded text-sm" /></div>
-              </div>
-              <div className="grid grid-cols-2 gap-3 bg-slate-50 p-2.5 rounded-lg border border-slate-200">
-                <div><label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">🚀 Data rozpoczęcia</label><input type="date" required value={startDate} onChange={e => setStartDate(e.target.value)} className="w-full p-2 border bg-white rounded text-sm font-semibold" /></div>
-                <div><label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">🏁 Data zakończenia</label><input type="date" required min={startDate} value={endDate} onChange={e => setEndDate(e.target.value)} className="w-full p-2 border bg-white rounded text-sm font-semibold" /></div>
-              </div>
-              <div>
-                <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Przypisz techników</label>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-32 overflow-y-auto border rounded p-2 bg-white">
-                  {technicians.map(t => (
-                    <label key={t.id} className="flex items-center gap-2 text-xs font-semibold text-slate-700">
-                      <input
-                        type="checkbox"
-                        checked={selectedTechIds.includes(t.id)}
-                        onChange={() => toggleTechnician(t.id)}
-                        className="h-4 w-4 rounded border-slate-300"
-                      />
-                      <span className="truncate">{t.full_name}</span>
-                    </label>
-                  ))}
-                  {technicians.length === 0 && <span className="text-xs text-slate-400">Brak techników w bazie.</span>}
+              {!isTechnician && (
+                <>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div><label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Klient</label><select value={clientId} onChange={e => setClientId(e.target.value)} className="w-full p-2 border bg-white rounded text-sm"><option value="">-- Brak --</option>{clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+                    <div><label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Kategoria</label><select value={categoryId} onChange={e => setCategoryId(e.target.value)} disabled={!clientId} className="w-full p-2 border bg-white rounded text-sm"><option value="">-- Brak --</option>{filteredCategoriesForForm.map(cat => <option key={cat.id} value={cat.id}>{cat.name}</option>)}</select></div>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div><label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Numer ticketu SD</label><input type="text" value={ticketNumber} onChange={e => setTicketNumber(e.target.value)} className="w-full p-2 border rounded text-sm" /></div>
+                    <div><label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Czasochłonność (h)</label><input type="number" min="1" value={durationHours} onChange={e => setDurationHours(e.target.value)} className="w-full p-2 border rounded text-sm" /></div>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-50 p-2.5 rounded-lg border border-slate-200">
+                    <div><label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Data rozpoczęcia</label><input type="date" required value={startDate} onChange={e => setStartDate(e.target.value)} className="w-full p-2 border bg-white rounded text-sm font-semibold" /></div>
+                    <div><label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">Data zakończenia</label><input type="date" required min={startDate} value={endDate} onChange={e => setEndDate(e.target.value)} className="w-full p-2 border bg-white rounded text-sm font-semibold" /></div>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Przypisz techników</label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-32 overflow-y-auto border rounded p-2 bg-white">
+                      {technicians.map(t => (
+                        <label key={t.id} className="flex items-center gap-2 text-xs font-semibold text-slate-700">
+                          <input
+                            type="checkbox"
+                            checked={selectedTechIds.includes(t.id)}
+                            onChange={() => toggleTechnician(t.id)}
+                            className="h-4 w-4 rounded border-slate-300"
+                          />
+                          <span className="truncate">{t.full_name}</span>
+                        </label>
+                      ))}
+                      {technicians.length === 0 && <span className="text-xs text-slate-400">Brak techników w bazie.</span>}
+                    </div>
+                  </div>
+                </>
+              )}
+              {isTechnician && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-50 p-2.5 rounded-lg border border-slate-200 text-xs font-semibold text-slate-600">
+                  <div>
+                    <span className="block text-[11px] font-bold uppercase text-slate-500">Termin</span>
+                    {startDate} do {endDate}
+                  </div>
+                  <div>
+                    <span className="block text-[11px] font-bold uppercase text-slate-500">Przypisanie</span>
+                    {isExistingTask ? 'Bez edycji' : 'Twoje zadanie'}
+                  </div>
                 </div>
-              </div>
+              )}
               <div><label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Miejscowość / Lokalizacja</label><input type="text" value={description} onChange={e => setDescription(e.target.value)} className="w-full p-2 border rounded text-sm" /></div>
             </div>
           )}
