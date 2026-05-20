@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../supabaseClient'
-import { Plus, Building2, Download } from 'lucide-react'
+import { Plus, Building2, Download, Upload } from 'lucide-react'
 import * as XLSX from 'xlsx'
 import TaskModal from './TaskModal'
 import { formatDateLocal, getTaskCardTitle, getTaskEndDate, getTaskMutationErrorMessage, getTaskStartDate, getTaskTechnicianIds, getTechnicianLabel } from '../utils/taskUtils'
@@ -20,6 +20,9 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
   } : null)
   const [selectedViewClientIds, setSelectedViewClientIds] = useState([])
   const [activeTechFilterId, setActiveTechFilterId] = useState('')
+  const [exportStartDate, setExportStartDate] = useState('')
+  const [exportEndDate, setExportEndDate] = useState('')
+  const [exportClientIds, setExportClientIds] = useState([])
 
   // Obsługa Modalu
   const [modalOpen, setModalOpen] = useState(false)
@@ -30,12 +33,23 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
   const year = currentDate.getFullYear()
   const month = currentDate.getMonth()
 
+  const getMonthRange = (baseDate) => ({
+    start: formatDateLocal(new Date(baseDate.getFullYear(), baseDate.getMonth(), 1)),
+    end: formatDateLocal(new Date(baseDate.getFullYear(), baseDate.getMonth() + 1, 0)),
+  })
+
   useEffect(() => {
     fetchTasks()
     fetchTechnicians()
     fetchClients()
     fetchClientCategories()
     checkCurrentUser()
+  }, [currentDate])
+
+  useEffect(() => {
+    const range = getMonthRange(currentDate)
+    setExportStartDate(range.start)
+    setExportEndDate(range.end)
   }, [currentDate])
 
   useEffect(() => {
@@ -276,6 +290,14 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
     ))
   }
 
+  const toggleExportClient = (clientId) => {
+    setExportClientIds(prev => (
+      prev.includes(clientId)
+        ? prev.filter(id => id !== clientId)
+        : [...prev, clientId]
+    ))
+  }
+
   const renderMonthTaskCard = (task, dateStr) => {
     const cat = clientCategories.find(c => c.id === task.category_id)
     const start = getTaskStartDate(task)
@@ -354,22 +376,30 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
   }
 
   const handleExportToExcel = () => {
-    const currentMonthStr = `${year}-${String(month + 1).padStart(2, '0')}`
-    const filteredTasks = tasks.filter(t => t.start_date.includes(currentMonthStr)).filter(isTaskVisible)
+    const rangeStart = exportStartDate || getMonthRange(currentDate).start
+    const rangeEnd = exportEndDate || getMonthRange(currentDate).end
+    const filteredTasks = tasks
+      .filter(isTaskVisible)
+      .filter(t => getTaskStartDate(t) <= rangeEnd && getTaskEndDate(t) >= rangeStart)
+      .filter(t => exportClientIds.length === 0 || exportClientIds.includes(Number(t.client_id)))
+
     const excelRows = filteredTasks.map(t => ({
       'ID (ServiceDesk)': t.ticket_number || '',
       'Klient': t.client_name || 'Brak',
+      'Kategoria': clientCategories.find(cat => cat.id === t.category_id)?.name || '',
       'Zadanie': t.title,
       'Lokalizacja': t.description || '',
+      'Technik': getTechnicianLabel(t, technicians),
       'Czasochłonność (h)': t.duration_hours || '',
-      'Status': t.status || 'Do realizacji',
+      'Zrealizowane': t.status === 'Zrealizowane' ? 'Tak' : 'Nie',
+      'Status': t.status === 'Zrealizowane' ? 'Zrealizowane' : 'Do realizacji',
       'Start': t.start_date,
       'Koniec': t.end_date
     }))
     const worksheet = XLSX.utils.json_to_sheet(excelRows)
     const workbook = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Harmonogram')
-    XLSX.writeFile(workbook, `Harmonogram_${currentMonthStr}.xlsx`)
+    XLSX.writeFile(workbook, `Harmonogram_${rangeStart}_${rangeEnd}.xlsx`)
   }
 
   const handleExcelImport = (e) => {
@@ -451,12 +481,50 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
       {/* KALENDARZ */}
       <div className={`${userRole === 'pm' ? 'xl:col-span-4' : 'xl:col-span-5'} space-y-4 min-w-0`}>
         {userRole !== 'technik' && (
-          <div className="bg-white p-4 rounded-xl shadow-md border border-slate-200 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between select-none">
-            <div>
-              <h4 className="text-sm font-black text-slate-900">Masowe ładowanie zgłoszeń</h4>
-              <p className="text-[11px] text-slate-500">Przerzuć kafelek metodą przeciągnij i upuść (Drag&Drop) na dowolną komórkę kalendarza.</p>
+          <div className="bg-white p-4 rounded-xl shadow-md border border-slate-200 space-y-3 select-none">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+              <div>
+                <h4 className="text-sm font-black text-slate-900">Import / eksport harmonogramu</h4>
+                <p className="text-[11px] text-slate-500">Eksport obejmuje zadania nachodzące na wybrany zakres dat.</p>
+              </div>
+              <div className="flex flex-wrap items-end gap-2">
+                <label className="text-[11px] font-bold uppercase text-slate-500">
+                  Od
+                  <input type="date" value={exportStartDate} onChange={e => setExportStartDate(e.target.value)} className="block mt-1 border rounded-lg px-2 py-1.5 text-xs font-bold text-slate-700" />
+                </label>
+                <label className="text-[11px] font-bold uppercase text-slate-500">
+                  Do
+                  <input type="date" value={exportEndDate} onChange={e => setExportEndDate(e.target.value)} className="block mt-1 border rounded-lg px-2 py-1.5 text-xs font-bold text-slate-700" />
+                </label>
+                <button type="button" onClick={() => fileInputRef.current.click()} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-lg shadow-sm flex items-center gap-1.5">
+                  <Upload size={14} />
+                  <span>Importuj</span>
+                </button>
+                <button type="button" onClick={handleExportToExcel} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-lg shadow-sm flex items-center gap-1.5">
+                  <Download size={14} />
+                  <span>Eksportuj</span>
+                </button>
+              </div>
             </div>
-            <button type="button" onClick={() => fileInputRef.current.click()} className="px-4 py-2 bg-emerald-600 text-white font-bold text-xs rounded-lg shadow-sm">Wgraj plik</button>
+            <div className="border-t pt-3">
+              <div className="mb-2 text-[11px] font-black uppercase tracking-wider text-slate-500">Klienci do eksportu</div>
+              <div className="flex flex-wrap gap-2">
+                <button type="button" onClick={() => setExportClientIds([])} className={`px-3 py-1.5 rounded-lg text-xs font-bold border ${exportClientIds.length === 0 ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-700 border-slate-200'}`}>
+                  Wszyscy
+                </button>
+                {clients.map(client => (
+                  <label key={client.id} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border cursor-pointer ${exportClientIds.includes(client.id) ? 'bg-blue-50 text-blue-800 border-blue-200' : 'bg-white text-slate-700 border-slate-200'}`}>
+                    <input
+                      type="checkbox"
+                      checked={exportClientIds.includes(client.id)}
+                      onChange={() => toggleExportClient(client.id)}
+                      className="h-3.5 w-3.5 rounded border-slate-300"
+                    />
+                    <span>{client.name}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
             <input type="file" ref={fileInputRef} accept=".xlsx, .xls, .csv" onChange={handleExcelImport} className="hidden" />
           </div>
         )}
@@ -469,7 +537,6 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            {userRole !== 'technik' && <button type="button" onClick={handleExportToExcel} className="px-3 py-1.5 border bg-blue-50 text-blue-700 font-bold text-xs rounded-lg flex items-center space-x-1.5"><Download size={14} /><span>Eksportuj</span></button>}
             {userRole === 'pm' && <select value={activeTechFilterId} onChange={(e) => setActiveTechFilterId(e.target.value)} className="border rounded-lg px-2 py-1.5 text-xs font-bold text-slate-700 outline-none"><option value="">Wszyscy technicy</option>{technicians.map(t => <option key={t.id} value={t.id}>{t.full_name}</option>)}</select>}
             <div className="flex items-center space-x-1">
               <button type="button" onClick={() => setCurrentDate(new Date(year, month - 1, 1))} className="p-2 bg-slate-100 rounded-lg">◀</button>
