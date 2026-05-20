@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../supabaseClient'
-import { Plus, Building2 } from 'lucide-react'
+import { Plus, Building2, ChevronLeft, ChevronRight, CalendarDays, Clock, MapPin } from 'lucide-react'
 import TaskModal from './TaskModal'
 import { buildTechnicianPayload, formatDateLocal, getTaskCardTitle, getTaskEndDate, getTaskMutationErrorMessage, getTaskStartDate, getTaskTechnicianIds, getTechnicianLabel } from '../utils/taskUtils'
 
@@ -126,7 +126,7 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
       result = await supabase.from('tasks').update(updateData).eq('id', currentActiveTask.id)
     } else {
       // Dodawanie nowego zlecenia
-      const clientName = payload.client_id ? clients.find(c => Number(c.id) === payload.client_id)?.name : null
+      const clientName = payload.client_id ? clients.find(c => Number(c.id) === payload.client_id)?.name : 'Brak'
       const insertData = userRole === 'technik'
         ? {
             title: payload.title,
@@ -134,6 +134,7 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
             status: payload.status,
             start_date: payload.start_date,
             end_date: payload.end_date,
+            client_name: 'Brak',
             technik_id: currentUser?.id || null,
             technician_ids: currentUser?.id ? [currentUser.id] : [],
           }
@@ -267,6 +268,19 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
     return dateStr >= start && dateStr <= end
   }
 
+  const formatMonthDayLabel = (dateStr) => {
+    const date = new Date(`${dateStr}T12:00:00`)
+    return date.toLocaleDateString('pl-PL', { weekday: 'long', day: '2-digit', month: '2-digit' })
+  }
+
+  const getTechnicianTasksForDate = (dateStr) => tasks
+    .filter(isTaskVisible)
+    .filter(task => taskCoversDate(task, dateStr))
+    .sort((a, b) => {
+      if ((a.status === 'Zrealizowane') !== (b.status === 'Zrealizowane')) return a.status === 'Zrealizowane' ? 1 : -1
+      return getTaskStartDate(a).localeCompare(getTaskStartDate(b)) || String(a.title || '').localeCompare(String(b.title || ''))
+    })
+
   const taskOverlapsWeek = (task, weekDates) => {
     const visibleDates = weekDates.filter(Boolean)
     if (visibleDates.length === 0) return false
@@ -388,6 +402,56 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
     )
   }
 
+  const renderTechnicianMonthCard = (task) => {
+    const isDone = task.status === 'Zrealizowane'
+    const start = getTaskStartDate(task)
+    const end = getTaskEndDate(task) || start
+
+    return (
+      <button
+        key={task.id}
+        type="button"
+        onClick={(e) => handleOpenDetails(task, e)}
+        className={`w-full rounded-xl border p-3 text-left shadow-sm transition ${isDone ? 'border-emerald-200 bg-emerald-50' : 'border-blue-200 bg-white active:bg-blue-50'}`}
+      >
+        <div className="flex items-start gap-3">
+          <input
+            type="checkbox"
+            checked={isDone}
+            onChange={e => handleToggleTaskDone(task, e.target.checked)}
+            onClick={e => e.stopPropagation()}
+            className="mt-1 h-5 w-5 rounded border-slate-300"
+            title="Zrealizowane"
+          />
+          <div className="min-w-0 flex-1">
+            <div className={`text-sm font-black leading-snug ${isDone ? 'text-emerald-900 line-through decoration-emerald-500/70' : 'text-slate-900'}`}>
+              {getTaskCardTitle(task)}
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] font-bold text-slate-500">
+              <span className={`rounded-full px-2 py-0.5 ${isDone ? 'bg-emerald-100 text-emerald-800' : 'bg-blue-100 text-blue-800'}`}>
+                {isDone ? 'Zrealizowane' : 'Do realizacji'}
+              </span>
+              {start !== end && <span className="rounded-full bg-slate-100 px-2 py-0.5">{start} - {end}</span>}
+              {task.duration_hours && <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5"><Clock size={12} /> {task.duration_hours}h</span>}
+              {task.description && <span className="inline-flex max-w-full items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5"><MapPin size={12} /> <span className="truncate">{task.description}</span></span>}
+            </div>
+          </div>
+          {task.ticket_number && (
+            <a
+              href={`https://servicedeskv5.exorigo-upos.pl/tickets/${task.ticket_number}`}
+              target="_blank"
+              rel="noreferrer"
+              onClick={e => e.stopPropagation()}
+              className="rounded-lg bg-yellow-300 px-2 py-1 text-xs font-black text-slate-900"
+            >
+              SD
+            </a>
+          )}
+        </div>
+      </button>
+    )
+  }
+
   // Generowanie komórek kalendarza
   const firstDayStr = new Date(year, month, 1)
   const lastDayStr = new Date(year, month + 1, 0)
@@ -405,6 +469,103 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
   }
 
   const monthNames = ["Styczeń", "Luty", "Marzec", "Kwiecień", "Maj", "Czerwiec", "Lipiec", "Sierpień", "Wrzesień", "Październik", "Listopad", "Grudzień"]
+  const monthDateStrings = gridCells.filter(Boolean).map(day => formatDateLocal(day))
+
+  if (userRole === 'technik') {
+    const monthTasks = tasks
+      .filter(isTaskVisible)
+      .filter(task => getTaskStartDate(task) <= monthDateStrings[monthDateStrings.length - 1] && getTaskEndDate(task) >= monthDateStrings[0])
+    const uniqueTasks = [...new Map(monthTasks.map(task => [task.id, task])).values()]
+    const openTaskCount = uniqueTasks.filter(task => task.status !== 'Zrealizowane').length
+    const todayStr = formatDateLocal(new Date())
+
+    return (
+      <div className="mx-auto max-w-3xl space-y-4 pb-20">
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <div className="flex items-center gap-2 text-xs font-black uppercase tracking-wider text-blue-700">
+                <CalendarDays size={15} />
+                Mój kalendarz
+              </div>
+              <h2 className="mt-1 text-2xl font-black text-slate-900">{monthNames[month]} <span className="font-normal text-blue-600">{year}</span></h2>
+              <p className="text-sm font-semibold text-slate-500">{uniqueTasks.length} zadań, {openTaskCount} do realizacji</p>
+            </div>
+            <button onClick={() => handleOpenCreateModal(todayStr)} className="rounded-xl bg-blue-600 px-3 py-2 text-sm font-black text-white shadow-sm active:bg-blue-700">
+              + Dodaj
+            </button>
+          </div>
+          <div className="mt-4 grid grid-cols-3 gap-2">
+            <button type="button" onClick={() => setCurrentDate(new Date(year, month - 1, 1))} className="rounded-xl bg-slate-100 px-3 py-3 text-sm font-black text-slate-700 active:bg-slate-200"><ChevronLeft size={18} className="mx-auto" /></button>
+            <button type="button" onClick={() => setCurrentDate(new Date())} className="rounded-xl bg-slate-100 px-3 py-3 text-sm font-black text-slate-700 active:bg-slate-200">Dzisiaj</button>
+            <button type="button" onClick={() => setCurrentDate(new Date(year, month + 1, 1))} className="rounded-xl bg-slate-100 px-3 py-3 text-sm font-black text-slate-700 active:bg-slate-200"><ChevronRight size={18} className="mx-auto" /></button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-7 gap-1 rounded-2xl border border-slate-200 bg-white p-2 shadow-sm">
+          {["Pn", "Wt", "Śr", "Cz", "Pt", "Sb", "Nd"].map(day => <div key={day} className="py-1 text-center text-[10px] font-black uppercase text-slate-400">{day}</div>)}
+          {gridCells.map((day, index) => {
+            if (!day) return <div key={`empty-${index}`} className="aspect-square rounded-lg bg-slate-50" />
+            const dateStr = formatDateLocal(day)
+            const dayTasks = getTechnicianTasksForDate(dateStr)
+            const isToday = dateStr === todayStr
+            return (
+              <button
+                key={dateStr}
+                type="button"
+                onClick={() => handleOpenCreateModal(dateStr)}
+                className={`aspect-square rounded-lg border text-center text-xs font-black ${isToday ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-100 bg-white text-slate-600'}`}
+              >
+                <span>{day.getDate()}</span>
+                {dayTasks.length > 0 && <span className={`mx-auto mt-1 block h-1.5 w-1.5 rounded-full ${dayTasks.some(task => task.status !== 'Zrealizowane') ? 'bg-blue-600' : 'bg-emerald-500'}`} />}
+              </button>
+            )
+          })}
+        </div>
+
+        <div className="space-y-3">
+          {monthDateStrings.map(dateStr => {
+            const dayTasks = getTechnicianTasksForDate(dateStr)
+            const isToday = dateStr === todayStr
+
+            return (
+              <section key={dateStr} className={`rounded-2xl border bg-white p-3 shadow-sm ${isToday ? 'border-blue-300 ring-2 ring-blue-100' : 'border-slate-200'}`}>
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <div>
+                    <h3 className={`text-sm font-black capitalize ${isToday ? 'text-blue-700' : 'text-slate-900'}`}>{formatMonthDayLabel(dateStr)}</h3>
+                    <p className="text-[11px] font-bold text-slate-400">{dayTasks.length ? `${dayTasks.length} zad.` : 'Brak zadań'}</p>
+                  </div>
+                  <button type="button" onClick={() => handleOpenCreateModal(dateStr)} className="rounded-lg bg-slate-100 px-3 py-2 text-xs font-black text-slate-700 active:bg-slate-200">
+                    <Plus size={14} />
+                  </button>
+                </div>
+                <div className="space-y-2">
+                  {dayTasks.length > 0 ? dayTasks.map(renderTechnicianMonthCard) : (
+                    <button type="button" onClick={() => handleOpenCreateModal(dateStr)} className="w-full rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-4 text-center text-sm font-bold text-slate-400">
+                      Dodaj własne zadanie
+                    </button>
+                  )}
+                </div>
+              </section>
+            )
+          })}
+        </div>
+
+        <TaskModal
+          isOpen={modalOpen}
+          onClose={() => { setModalOpen(false); setCurrentActiveTask(null); }}
+          selectedTask={currentActiveTask}
+          userRole={userRole}
+          currentUserId={currentUser?.id}
+          clients={clients}
+          technicians={technicians}
+          clientCategories={clientCategories}
+          onSave={handleSaveModal}
+          onDelete={handleDeleteModal}
+        />
+      </div>
+    )
+  }
 
   return (
     <div className="grid grid-cols-1 xl:grid-cols-5 gap-4 sm:gap-6 items-start font-sans min-w-0">
