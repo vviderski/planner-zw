@@ -1,9 +1,8 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { supabase } from '../supabaseClient'
-import { Plus, Building2, Download, Upload } from 'lucide-react'
-import * as XLSX from 'xlsx'
+import { Plus, Building2 } from 'lucide-react'
 import TaskModal from './TaskModal'
-import { formatDateLocal, getTaskCardTitle, getTaskEndDate, getTaskMutationErrorMessage, getTaskStartDate, getTaskTechnicianIds, getTechnicianLabel } from '../utils/taskUtils'
+import { buildTechnicianPayload, formatDateLocal, getTaskCardTitle, getTaskEndDate, getTaskMutationErrorMessage, getTaskStartDate, getTaskTechnicianIds, getTechnicianLabel } from '../utils/taskUtils'
 
 export default function MonthView({ currentUser: authUser, currentUserRole = 'technik' }) {
   const [tasks, setTasks] = useState([])
@@ -20,23 +19,15 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
   } : null)
   const [selectedViewClientIds, setSelectedViewClientIds] = useState([])
   const [activeTechFilterId, setActiveTechFilterId] = useState('')
-  const [exportStartDate, setExportStartDate] = useState('')
-  const [exportEndDate, setExportEndDate] = useState('')
-  const [exportClientIds, setExportClientIds] = useState([])
 
   // Obsługa Modalu
   const [modalOpen, setModalOpen] = useState(false)
   const [currentActiveTask, setCurrentActiveTask] = useState(null)
+  const [contextMenu, setContextMenu] = useState(null)
 
-  const fileInputRef = useRef(null)
   const [currentDate, setCurrentDate] = useState(new Date())
   const year = currentDate.getFullYear()
   const month = currentDate.getMonth()
-
-  const getMonthRange = (baseDate) => ({
-    start: formatDateLocal(new Date(baseDate.getFullYear(), baseDate.getMonth(), 1)),
-    end: formatDateLocal(new Date(baseDate.getFullYear(), baseDate.getMonth() + 1, 0)),
-  })
 
   useEffect(() => {
     fetchTasks()
@@ -44,12 +35,6 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
     fetchClients()
     fetchClientCategories()
     checkCurrentUser()
-  }, [currentDate])
-
-  useEffect(() => {
-    const range = getMonthRange(currentDate)
-    setExportStartDate(range.start)
-    setExportEndDate(range.end)
   }, [currentDate])
 
   useEffect(() => {
@@ -63,6 +48,12 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
       }))
     }
   }, [authUser, currentUserRole])
+
+  useEffect(() => {
+    const handleGlobalClick = () => setContextMenu(null)
+    window.addEventListener('click', handleGlobalClick)
+    return () => window.removeEventListener('click', handleGlobalClick)
+  }, [])
 
   useEffect(() => {
     if (!currentUser?.id) return
@@ -165,6 +156,31 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
     await supabase.from('tasks').delete().eq('id', id)
     setModalOpen(false)
     setCurrentActiveTask(null)
+    fetchTasks()
+  }
+
+  const handleDuplicateTask = async (task) => {
+    if (userRole === 'technik') return
+
+    const { error } = await supabase.from('tasks').insert([{
+      title: `${task.title || 'Zadanie'} (Kopia)`,
+      client_id: task.client_id,
+      category_id: task.category_id,
+      ...buildTechnicianPayload(getTaskTechnicianIds(task)),
+      start_date: task.start_date,
+      end_date: task.end_date,
+      client_name: task.client_name,
+      description: task.description,
+      ticket_number: task.ticket_number,
+      duration_hours: task.duration_hours,
+      status: task.status || 'Do realizacji',
+    }])
+
+    if (error) {
+      alert(getTaskMutationErrorMessage(error))
+      return
+    }
+
     fetchTasks()
   }
 
@@ -290,14 +306,6 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
     ))
   }
 
-  const toggleExportClient = (clientId) => {
-    setExportClientIds(prev => (
-      prev.includes(clientId)
-        ? prev.filter(id => id !== clientId)
-        : [...prev, clientId]
-    ))
-  }
-
   const renderMonthTaskCard = (task, dateStr) => {
     const cat = clientCategories.find(c => c.id === task.category_id)
     const start = getTaskStartDate(task)
@@ -315,6 +323,11 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
           e.dataTransfer.setData('text/plain', task.id)
         }}
         onClick={(e) => handleOpenDetails(task, e)}
+        onContextMenu={e => {
+          e.preventDefault()
+          e.stopPropagation()
+          if (userRole !== 'technik') setContextMenu({ x: e.clientX, y: e.clientY, task })
+        }}
         className={`relative h-12 bg-blue-600 text-white text-xs px-2 py-1 shadow font-bold cursor-grab active:cursor-grabbing text-left hover:bg-blue-700 transition border-y border-blue-700 ${isDone ? 'bg-emerald-600 hover:bg-emerald-700 border-emerald-700' : ''} ${isStart ? 'rounded-l border-l ml-1' : '-ml-px'} ${isEnd ? 'rounded-r border-r mr-1' : '-mr-px'} ${!isStart && !isEnd ? 'rounded-none' : ''}`}
       >
         {isStart && userRole !== 'technik' && (
@@ -375,59 +388,6 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
     )
   }
 
-  const handleExportToExcel = () => {
-    const rangeStart = exportStartDate || getMonthRange(currentDate).start
-    const rangeEnd = exportEndDate || getMonthRange(currentDate).end
-    const filteredTasks = tasks
-      .filter(isTaskVisible)
-      .filter(t => getTaskStartDate(t) <= rangeEnd && getTaskEndDate(t) >= rangeStart)
-      .filter(t => exportClientIds.length === 0 || exportClientIds.includes(Number(t.client_id)))
-
-    const excelRows = filteredTasks.map(t => ({
-      'ID (ServiceDesk)': t.ticket_number || '',
-      'Klient': t.client_name || 'Brak',
-      'Kategoria': clientCategories.find(cat => cat.id === t.category_id)?.name || '',
-      'Zadanie': t.title,
-      'Lokalizacja': t.description || '',
-      'Technik': getTechnicianLabel(t, technicians),
-      'Czasochłonność (h)': t.duration_hours || '',
-      'Zrealizowane': t.status === 'Zrealizowane' ? 'Tak' : 'Nie',
-      'Status': t.status === 'Zrealizowane' ? 'Zrealizowane' : 'Do realizacji',
-      'Start': t.start_date,
-      'Koniec': t.end_date
-    }))
-    const worksheet = XLSX.utils.json_to_sheet(excelRows)
-    const workbook = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'Harmonogram')
-    XLSX.writeFile(workbook, `Harmonogram_${rangeStart}_${rangeEnd}.xlsx`)
-  }
-
-  const handleExcelImport = (e) => {
-    const file = e.target.files[0]
-    if (!file) return
-    const reader = new FileReader()
-    reader.onload = async (evt) => {
-      try {
-        const bstr = evt.target.result
-        const wb = XLSX.read(bstr, { type: 'binary', cellDates: true })
-        const ws = wb.Sheets[wb.SheetNames[0]]
-        const rawData = XLSX.utils.sheet_to_json(ws)
-        const tasksToInsert = rawData.map(row => {
-          let formattedDate = row['Fixed Date'] instanceof Date ? formatDateLocal(row['Fixed Date']) : row['Fixed Date'].toString().split(' ')[0]
-          const matchedClient = clients.find(c => c.name.toLowerCase().trim() === (row['Client'] || '').toString().toLowerCase().trim())
-          return {
-            title: row['Summary'] || '', ticket_number: (row['ID'] || '').toString().trim() || null, start_date: formattedDate, end_date: formattedDate, status: 'Do realizacji',
-            client_id: matchedClient ? matchedClient.id : null, client_name: matchedClient ? matchedClient.name : (row['Client'] || null), description: row['Location'] || '', technician_ids: []
-          }
-        })
-        await supabase.from('tasks').insert(tasksToInsert)
-        fetchTasks()
-      } catch { alert('Błąd pliku Excel.') }
-    }
-    reader.readAsBinaryString(file)
-    e.target.value = null
-  }
-
   // Generowanie komórek kalendarza
   const firstDayStr = new Date(year, month, 1)
   const lastDayStr = new Date(year, month + 1, 0)
@@ -480,7 +440,7 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
 
       {/* KALENDARZ */}
       <div className={`${userRole === 'pm' ? 'xl:col-span-4' : 'xl:col-span-5'} space-y-4 min-w-0`}>
-        {userRole !== 'technik' && (
+        {/*
           <div className="bg-white p-4 rounded-xl shadow-md border border-slate-200 space-y-3 select-none">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
               <div>
@@ -527,7 +487,7 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
             </div>
             <input type="file" ref={fileInputRef} accept=".xlsx, .xls, .csv" onChange={handleExcelImport} className="hidden" />
           </div>
-        )}
+        */}
 
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between bg-white p-4 rounded-xl shadow-md border border-slate-200 select-none">
           <div>
@@ -607,6 +567,17 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
       </div>
 
       {/* KOMPONENT MODALU ZEWNĘTRZNEGO */}
+      {contextMenu && (
+        <div className="fixed bg-white border shadow-xl rounded-lg py-1 z-50 min-w-[150px]" style={{ top: contextMenu.y, left: contextMenu.x }} onClick={e => e.stopPropagation()}>
+          <button type="button" onClick={() => { handleDuplicateTask(contextMenu.task); setContextMenu(null); }} className="w-full text-left px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50">
+            Zduplikuj
+          </button>
+          <button type="button" onClick={() => { handleDeleteModal(contextMenu.task.id); setContextMenu(null); }} className="w-full text-left px-4 py-2 text-xs font-bold text-red-600 hover:bg-red-50 border-t">
+            Usuń
+          </button>
+        </div>
+      )}
+
       <TaskModal 
         isOpen={modalOpen}
         onClose={() => { setModalOpen(false); setCurrentActiveTask(null); }}

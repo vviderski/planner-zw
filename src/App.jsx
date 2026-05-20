@@ -4,6 +4,7 @@ import { supabase } from './supabaseClient'
 // Importy komponentów
 import LoginForm from './components/LoginForm'
 import SchedulerView from './components/SchedulerView'
+import PmWorkloadView from './components/PmWorkloadView'
 import TeamManager from './components/TeamManager'
 import MonthView from './components/MonthView'
 import ClientManager from './components/ClientManager'
@@ -41,7 +42,7 @@ function App() {
   }, [user?.id])
 
   useEffect(() => {
-    if (userRole !== 'pm' && (activeTab === 'clients' || activeTab === 'team')) {
+    if (userRole !== 'pm' && (activeTab === 'pmWorkload' || activeTab === 'clients' || activeTab === 'team')) {
       setActiveTab('workload')
     }
   }, [activeTab, userRole])
@@ -69,6 +70,12 @@ function App() {
                 </button>
                 {userRole === 'pm' && (
                   <>
+                    <button
+                      onClick={() => setActiveTab('pmWorkload')}
+                      className={`px-4 py-1.5 rounded text-sm font-medium transition whitespace-nowrap ${activeTab === 'pmWorkload' ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-800'}`}
+                    >
+                      Workload PM
+                    </button>
                     <button
                       onClick={() => setActiveTab('clients')}
                       className={`px-4 py-1.5 rounded text-sm font-medium transition whitespace-nowrap ${activeTab === 'clients' ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-800'}`}
@@ -99,9 +106,10 @@ function App() {
           {/* GŁÓWNA ZAWARTOŚĆ STRONY */}
           <main className="flex-1 p-3 sm:p-6 min-w-0">
             {activeTab === 'workload' && <SchedulerView currentUser={user} currentUserRole={userRole} />}
+            {activeTab === 'pmWorkload' && userRole === 'pm' && <PmWorkloadView />}
             {activeTab === 'month' && <MonthView currentUser={user} currentUserRole={userRole} />}
             {activeTab === 'clients' && userRole === 'pm' && <ClientManager />}
-            {activeTab === 'team' && userRole === 'pm' && <TeamManager />}
+            {activeTab === 'team' && userRole === 'pm' && <TeamManager currentUser={user} />}
           </main>
         </>
       ) : (
