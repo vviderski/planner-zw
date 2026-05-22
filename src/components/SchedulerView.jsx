@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../supabaseClient'
 import { Plus, X, Save, ChevronLeft, ChevronRight, CalendarDays, Clock, MapPin } from 'lucide-react'
-import { buildTechnicianPayload, getTaskCardTitle, getTaskEndDate, getTaskMutationErrorMessage, getTaskStartDate, getTaskTechnicianIds } from '../utils/taskUtils'
+import { buildTechnicianPayload, getMapsDirectionsUrl, getTaskCardTitle, getTaskEndDate, getTaskMutationErrorMessage, getTaskStartDate, getTaskTechnicianIds } from '../utils/taskUtils'
+import { getTaskChangeHistoryEntries, logTaskHistory } from '../utils/taskHistory'
 
 export default function SchedulerView({ currentUser, currentUserRole = 'technik' }) {
   const [tasks, setTasks] = useState([])
@@ -21,8 +22,10 @@ export default function SchedulerView({ currentUser, currentUserRole = 'technik'
   const [selectedTechIds, setSelectedTechIds] = useState([])
   const [taskDate, setTaskDate] = useState('')
   const [description, setDescription] = useState('')
+  const [address, setAddress] = useState('')
   const [ticketNumber, setTicketNumber] = useState('')
   const [durationHours, setDurationHours] = useState('')
+  const [taskHistory, setTaskHistory] = useState([])
 
   const [filteredCategoriesForForm, setFilteredCategoriesForForm] = useState([])
   const userRole = currentUserRole
@@ -120,6 +123,27 @@ export default function SchedulerView({ currentUser, currentUserRole = 'technik'
     }
   }, [clientId, clientCategories])
 
+  useEffect(() => {
+    const fetchTaskHistory = async () => {
+      if (!selectedTask?.id) {
+        setTaskHistory([])
+        return
+      }
+
+      const { data, error } = await supabase
+        .from('task_history')
+        .select('*')
+        .eq('task_id', selectedTask.id)
+        .order('created_at', { ascending: false })
+        .limit(20)
+
+      if (!error && data) setTaskHistory(data)
+      else setTaskHistory([])
+    }
+
+    fetchTaskHistory()
+  }, [selectedTask?.id])
+
   const handleCategoryChange = (catId) => {
     setCategoryId(catId)
     if (catId) {
@@ -157,6 +181,8 @@ export default function SchedulerView({ currentUser, currentUserRole = 'technik'
     setCategoryId('')
     setTicketNumber('')
     setDurationHours('')
+    setDescription('')
+    setAddress('')
     setTaskDate(dateStr)
     setSelectedTechIds(userRole === 'technik' && currentUser?.id ? [currentUser.id] : (initialTechId ? [initialTechId] : []))
     setShowModal(true)
@@ -170,6 +196,7 @@ export default function SchedulerView({ currentUser, currentUserRole = 'technik'
     setSelectedTechIds(getTaskTechnicianIds(task))
     setTaskDate(task.start_date.split('T')[0])
     setDescription(task.description || '')
+    setAddress(task.address || '')
     setTicketNumber(task.ticket_number || '')
     setDurationHours(task.duration_hours ? task.duration_hours.toString() : '')
   }
@@ -179,6 +206,7 @@ export default function SchedulerView({ currentUser, currentUserRole = 'technik'
     const technicianTaskPayload = {
       title,
       description,
+      address,
       ...buildTechnicianPayload(currentUser?.id ? [currentUser.id] : []),
       start_date: taskDate,
       end_date: taskDate,
@@ -189,14 +217,18 @@ export default function SchedulerView({ currentUser, currentUserRole = 'technik'
       title, client_id: clientId ? Number(clientId) : null, category_id: categoryId ? Number(categoryId) : null,
       ...buildTechnicianPayload(selectedTechIds), start_date: taskDate, end_date: taskDate,
       client_name: clientId ? clients.find(c => c.id === Number(clientId))?.name : 'Brak', description,
+      address,
       ticket_number: ticketNumber.trim() || null, duration_hours: durationHours ? Number(durationHours) : null
     }
-    const { error } = await supabase.from('tasks').insert([
+    const { data, error } = await supabase.from('tasks').insert([
       userRole === 'technik' ? technicianTaskPayload : pmTaskPayload
-    ])
+    ]).select('id').single()
     if (error) {
       alert(getTaskMutationErrorMessage(error))
       return
+    }
+    if (data?.id) {
+      await logTaskHistory({ taskId: data.id, currentUser, action: 'Utworzenie kafelki', details: 'Dodano nową kafelkę.' })
     }
     setShowModal(false)
     fetchTasks()
@@ -208,12 +240,17 @@ export default function SchedulerView({ currentUser, currentUserRole = 'technik'
       title, client_id: clientId ? Number(clientId) : null, category_id: categoryId ? Number(categoryId) : null,
       ...buildTechnicianPayload(selectedTechIds), start_date: taskDate, end_date: taskDate,
       client_name: clientId ? clients.find(c => c.id === Number(clientId))?.name : null, description,
+      address,
       ticket_number: ticketNumber.trim() || null, duration_hours: durationHours ? Number(durationHours) : null
     }
     const { error } = await supabase.from('tasks').update(updatePayload).eq('id', selectedTask.id)
     if (error) {
       alert(getTaskMutationErrorMessage(error))
       return
+    }
+    const historyEntries = getTaskChangeHistoryEntries({ before: selectedTask, after: { ...selectedTask, ...updatePayload }, technicians })
+    for (const entry of historyEntries) {
+      await logTaskHistory({ taskId: selectedTask.id, currentUser, ...entry })
     }
     setSelectedTask(null)
     fetchTasks()
@@ -226,22 +263,33 @@ export default function SchedulerView({ currentUser, currentUserRole = 'technik'
   }
 
   const handleDuplicateTask = async (task) => {
-    const { error } = await supabase.from('tasks').insert([{
-      title: task.title + ' (Kopia)', client_id: task.client_id, category_id: task.category_id, ...buildTechnicianPayload(getTaskTechnicianIds(task)), start_date: task.start_date, end_date: task.end_date, client_name: task.client_name, description: task.description, ticket_number: task.ticket_number, duration_hours: task.duration_hours
-    }])
+    const { data, error } = await supabase.from('tasks').insert([{
+      title: task.title + ' (Kopia)', client_id: task.client_id, category_id: task.category_id, ...buildTechnicianPayload(getTaskTechnicianIds(task)), start_date: task.start_date, end_date: task.end_date, client_name: task.client_name, description: task.description, address: task.address, ticket_number: task.ticket_number, duration_hours: task.duration_hours
+    }]).select('id').single()
     if (error) {
       alert(getTaskMutationErrorMessage(error))
       return
+    }
+    if (data?.id) {
+      await logTaskHistory({ taskId: data.id, currentUser, action: 'Utworzenie kafelki', details: `Zduplikowano z kafelki #${task.id}.` })
     }
     fetchTasks()
   }
 
   const handleMoveTask = async (taskId, newTechId, newDate) => {
     if (userRole === 'technik') return
+    const task = tasks.find(item => item.id === Number(taskId))
     const { error } = await supabase.from('tasks').update({ ...buildTechnicianPayload(newTechId === 'unassigned' ? [] : [newTechId]), start_date: newDate, end_date: newDate }).eq('id', taskId)
     if (error) {
       alert(getTaskMutationErrorMessage(error))
       return
+    }
+    if (task) {
+      const after = { ...task, ...buildTechnicianPayload(newTechId === 'unassigned' ? [] : [newTechId]), start_date: newDate, end_date: newDate }
+      const historyEntries = getTaskChangeHistoryEntries({ before: task, after, technicians })
+      for (const entry of historyEntries) {
+        await logTaskHistory({ taskId, currentUser, ...entry })
+      }
     }
     fetchTasks()
   }
@@ -257,6 +305,12 @@ export default function SchedulerView({ currentUser, currentUserRole = 'technik'
       return
     }
 
+    await logTaskHistory({
+      taskId: task.id,
+      currentUser,
+      action: 'Zmiana statusu',
+      details: `${task.status || 'Do realizacji'} -> ${checked ? 'Zrealizowane' : 'Do realizacji'}`,
+    })
     fetchTasks()
   }
 
@@ -270,6 +324,29 @@ export default function SchedulerView({ currentUser, currentUserRole = 'technik'
         ? prev.filter(id => id !== technicianId)
         : [...prev, technicianId]
     ))
+  }
+
+  const renderTaskHistoryPanel = () => {
+    if (!selectedTask?.id) return null
+
+    return (
+      <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+        <div className="mb-2 text-[11px] font-black uppercase tracking-wider text-slate-500">Historia kafelki</div>
+        <div className="space-y-2">
+          {taskHistory.length > 0 ? taskHistory.map(item => (
+            <div key={item.id} className="rounded border border-slate-200 bg-white p-2 text-xs text-slate-600">
+              <div className="font-black text-slate-800">{item.action}</div>
+              <div>{item.details || 'Brak szczegółów'}</div>
+              <div className="mt-1 text-[10px] font-bold text-slate-400">
+                {item.actor_name || 'System'} · {item.created_at ? new Date(item.created_at).toLocaleString('pl-PL') : ''}
+              </div>
+            </div>
+          )) : (
+            <div className="text-xs font-semibold text-slate-400">Brak zapisanej historii.</div>
+          )}
+        </div>
+      </div>
+    )
   }
 
   const renderTaskCard = (task) => {
@@ -294,6 +371,11 @@ export default function SchedulerView({ currentUser, currentUserRole = 'technik'
           {task.ticket_number && (
             <a href={`https://servicedeskv5.exorigo-upos.pl/tickets/${task.ticket_number}`} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} title={`Otwórz zgłoszenie SD #${task.ticket_number}`} className="bg-yellow-400 hover:bg-yellow-300 text-slate-900 px-2 py-0.5 rounded font-black text-[10px] tracking-wider transition shrink-0 shadow-sm flex items-center justify-center border border-yellow-500/20">
               SD
+            </a>
+          )}
+          {task.address && (
+            <a href={getMapsDirectionsUrl(task.address)} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} title="Wyznacz trasę w Google Maps" className="bg-white/90 hover:bg-white text-blue-800 px-2 py-0.5 rounded font-black text-[10px] tracking-wider transition shrink-0 shadow-sm flex items-center justify-center">
+              MAPA
             </a>
           )}
         </div>
@@ -333,6 +415,12 @@ export default function SchedulerView({ currentUser, currentUserRole = 'technik'
               {start !== end && <span className="rounded-full bg-slate-100 px-2 py-0.5">{start} - {end}</span>}
               {task.duration_hours && <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5"><Clock size={12} /> {task.duration_hours}h</span>}
               {task.description && <span className="inline-flex max-w-full items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5"><MapPin size={12} /> <span className="truncate">{task.description}</span></span>}
+              {task.address && (
+                <a href={getMapsDirectionsUrl(task.address)} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} className="inline-flex items-center gap-1 rounded-full bg-blue-600 px-2 py-0.5 text-white">
+                  <MapPin size={12} />
+                  Trasa
+                </a>
+              )}
             </div>
           </div>
           {task.ticket_number && (
@@ -409,7 +497,7 @@ export default function SchedulerView({ currentUser, currentUserRole = 'technik'
 
         {(showModal || selectedTask) ? (
           <div className="fixed inset-0 bg-slate-900/60 flex items-center justify-center p-4 z-50">
-            <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6 space-y-4 relative">
+            <div className="bg-white rounded-xl shadow-xl w-full max-w-md max-h-[92vh] overflow-y-auto p-6 space-y-4 relative">
               <button onClick={() => { setShowModal(false); setSelectedTask(null); }} className="absolute top-4 right-4 text-slate-400"><X size={20} /></button>
               <h3 className="text-base font-black text-slate-900 border-b pb-2">{selectedTask ? 'Szczegóły zadania' : 'Nowe zadanie'}</h3>
               <form onSubmit={selectedTask ? handleUpdateTask : handleCreateTask} className="space-y-3">
@@ -423,6 +511,13 @@ export default function SchedulerView({ currentUser, currentUserRole = 'technik'
                       <div><span className="text-slate-400">Temat:</span> {title}</div>
                       <div><span className="text-slate-400">Termin:</span> {taskDate}</div>
                       <div><span className="text-slate-400">Lokalizacja:</span> {description || 'Brak'}</div>
+                      <div><span className="text-slate-400">Adres:</span> {address || 'Brak'}</div>
+                      {address && (
+                        <a href={getMapsDirectionsUrl(address)} target="_blank" rel="noreferrer" className="mt-2 inline-flex items-center gap-1 rounded-lg bg-blue-600 px-3 py-2 text-xs font-black text-white">
+                          <MapPin size={14} />
+                          Trasa Google Maps
+                        </a>
+                      )}
                       <div><span className="text-slate-400">SD:</span> {ticketNumber || 'Brak'}</div>
                     </div>
                   </div>
@@ -431,8 +526,10 @@ export default function SchedulerView({ currentUser, currentUserRole = 'technik'
                     <div><label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Nazwa zadania / opis</label><input type="text" required value={title} onChange={e => setTitle(e.target.value)} className="w-full p-3 border rounded-lg text-base" /></div>
                     <div className="bg-slate-50 border rounded-lg p-3 text-xs font-semibold text-slate-600">Nowe zadanie zostanie przypisane do Ciebie na dzień {taskDate}.</div>
                     <div><label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Miejscowość / lokalizacja</label><textarea value={description} onChange={e => setDescription(e.target.value)} rows="3" className="w-full p-3 border rounded-lg text-base" /></div>
+                    <div><label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Adres dojazdu</label><input type="text" value={address} onChange={e => setAddress(e.target.value)} className="w-full p-3 border rounded-lg text-base" placeholder="Ulica, numer, miejscowość" /></div>
                   </>
                 )}
+                {renderTaskHistoryPanel()}
                 <div className="flex justify-end space-x-2 pt-2 border-t">
                   <button type="submit" className="px-5 py-3 bg-blue-600 text-white rounded-lg text-sm font-black"><Save size={14} /> <span>Zapisz</span></button>
                 </div>
@@ -552,7 +649,7 @@ export default function SchedulerView({ currentUser, currentUserRole = 'technik'
       {/* FORMULARZ MODALU */}
       {(showModal || selectedTask) ? (
         <div className="fixed inset-0 bg-slate-900/60 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6 space-y-4 relative">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md max-h-[92vh] overflow-y-auto p-6 space-y-4 relative">
             <button onClick={() => { setShowModal(false); setSelectedTask(null); }} className="absolute top-4 right-4 text-slate-400"><X size={20} /></button>
             <h3 className="text-base font-black text-slate-900 border-b pb-2">{selectedTask ? 'Modyfikacja zlecenia' : 'Nowe zlecenie'}</h3>
             <form onSubmit={selectedTask ? handleUpdateTask : handleCreateTask} className="space-y-3">
@@ -600,7 +697,9 @@ export default function SchedulerView({ currentUser, currentUserRole = 'technik'
                   Nowe zadanie zostanie przypisane do Ciebie na dzień {taskDate}.
                 </div>
               )}
-              <div><label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Uwagi</label><textarea value={description} onChange={e => setDescription(e.target.value)} rows="2" className="w-full p-2 border rounded text-sm" /></div>
+              <div><label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Miejscowość / lokalizacja</label><textarea value={description} onChange={e => setDescription(e.target.value)} rows="2" className="w-full p-2 border rounded text-sm" /></div>
+              <div><label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Adres dojazdu</label><input type="text" value={address} onChange={e => setAddress(e.target.value)} className="w-full p-2 border rounded text-sm" placeholder="Ulica, numer, miejscowość" /></div>
+              {renderTaskHistoryPanel()}
               <div className="flex justify-end space-x-2 pt-2 border-t">
                 {selectedTask && <button type="button" onClick={() => handleDeleteTask(selectedTask.id)} className="mr-auto px-3 py-2 bg-red-50 text-red-600 rounded text-xs font-bold">Usuń</button>}
                 <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded text-xs font-bold"><Save size={14} /> <span>Zapisz</span></button>

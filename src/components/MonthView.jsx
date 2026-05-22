@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../supabaseClient'
 import { Plus, Building2, ChevronLeft, ChevronRight, CalendarDays, Clock, MapPin } from 'lucide-react'
 import TaskModal from './TaskModal'
-import { buildTechnicianPayload, formatDateLocal, getTaskCardTitle, getTaskEndDate, getTaskMutationErrorMessage, getTaskStartDate, getTaskTechnicianIds, getTechnicianLabel } from '../utils/taskUtils'
+import { buildTechnicianPayload, formatDateLocal, getIsoWeekNumber, getMapsDirectionsUrl, getTaskCardTitle, getTaskEndDate, getTaskMutationErrorMessage, getTaskStartDate, getTaskTechnicianIds, getTechnicianLabel } from '../utils/taskUtils'
+import { getTaskChangeHistoryEntries, logTaskHistory } from '../utils/taskHistory'
 
 export default function MonthView({ currentUser: authUser, currentUserRole = 'technik' }) {
   const [tasks, setTasks] = useState([])
@@ -124,6 +125,12 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
       // Edycja obecnego zlecenia
       const updateData = userRole === 'technik' ? { status: payload.status } : payload
       result = await supabase.from('tasks').update(updateData).eq('id', currentActiveTask.id)
+      if (!result?.error) {
+        const historyEntries = getTaskChangeHistoryEntries({ before: currentActiveTask, after: { ...currentActiveTask, ...updateData }, technicians })
+        for (const entry of historyEntries) {
+          await logTaskHistory({ taskId: currentActiveTask.id, currentUser, ...entry })
+        }
+      }
     } else {
       // Dodawanie nowego zlecenia
       const clientName = payload.client_id ? clients.find(c => Number(c.id) === payload.client_id)?.name : 'Brak'
@@ -131,6 +138,7 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
         ? {
             title: payload.title,
             description: payload.description,
+            address: payload.address,
             status: payload.status,
             start_date: payload.start_date,
             end_date: payload.end_date,
@@ -139,7 +147,10 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
             technician_ids: currentUser?.id ? [currentUser.id] : [],
           }
         : { ...payload, client_name: clientName }
-      result = await supabase.from('tasks').insert([insertData])
+      result = await supabase.from('tasks').insert([insertData]).select('id').single()
+      if (!result?.error && result?.data?.id) {
+        await logTaskHistory({ taskId: result.data.id, currentUser, action: 'Utworzenie kafelki', details: 'Dodano nową kafelkę.' })
+      }
     }
 
     if (result?.error) {
@@ -163,7 +174,7 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
   const handleDuplicateTask = async (task) => {
     if (userRole === 'technik') return
 
-    const { error } = await supabase.from('tasks').insert([{
+    const { data, error } = await supabase.from('tasks').insert([{
       title: `${task.title || 'Zadanie'} (Kopia)`,
       client_id: task.client_id,
       category_id: task.category_id,
@@ -172,14 +183,19 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
       end_date: task.end_date,
       client_name: task.client_name,
       description: task.description,
+      address: task.address,
       ticket_number: task.ticket_number,
       duration_hours: task.duration_hours,
       status: task.status || 'Do realizacji',
-    }])
+    }]).select('id').single()
 
     if (error) {
       alert(getTaskMutationErrorMessage(error))
       return
+    }
+
+    if (data?.id) {
+      await logTaskHistory({ taskId: data.id, currentUser, action: 'Utworzenie kafelki', details: `Zduplikowano z kafelki #${task.id}.` })
     }
 
     fetchTasks()
@@ -207,6 +223,12 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
       alert(getTaskMutationErrorMessage(error))
       return
     }
+    await logTaskHistory({
+      taskId,
+      currentUser,
+      action: 'Zmiana daty',
+      details: `${getTaskStartDate(task)} - ${getTaskEndDate(task)} -> ${formatDateLocal(newStart)} - ${formatDateLocal(newEnd)}`,
+    })
     fetchTasks()
   }
 
@@ -226,7 +248,29 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
       alert(getTaskMutationErrorMessage(error))
       return
     }
+    await logTaskHistory({
+      taskId,
+      currentUser,
+      action: 'Zmiana daty',
+      details: `${currentStart} - ${currentEnd} -> ${updateData.start_date || currentStart} - ${updateData.end_date || currentEnd}`,
+    })
     fetchTasks()
+  }
+
+  const handleBoundaryDrop = async (direction, event) => {
+    event.preventDefault()
+    const payload = readDragPayload(event)
+    if (!payload) return
+
+    const targetDate = direction === 'previous'
+      ? formatDateLocal(new Date(year, month, 0))
+      : formatDateLocal(new Date(year, month + 1, 1))
+
+    if (payload.action === 'resize-start') await handleResizeTaskDate(payload.taskId, 'start', targetDate)
+    else if (payload.action === 'resize-end') await handleResizeTaskDate(payload.taskId, 'end', targetDate)
+    else await handleMoveTaskDate(payload.taskId, targetDate)
+
+    setCurrentDate(new Date(year, direction === 'previous' ? month - 1 : month + 1, 1))
   }
 
   const handleToggleTaskDone = async (task, checked) => {
@@ -240,6 +284,12 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
       return
     }
 
+    await logTaskHistory({
+      taskId: task.id,
+      currentUser,
+      action: 'Zmiana statusu',
+      details: `${task.status || 'Do realizacji'} -> ${checked ? 'Zrealizowane' : 'Do realizacji'}`,
+    })
     fetchTasks()
   }
 
@@ -397,6 +447,18 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
               SD
             </a>
           )}
+          {task.address && (
+            <a
+              href={getMapsDirectionsUrl(task.address)}
+              target="_blank"
+              rel="noreferrer"
+              onClick={e => e.stopPropagation()}
+              title="Wyznacz trasę w Google Maps"
+              className="bg-white/90 hover:bg-white text-blue-800 px-2 py-0.5 rounded font-black text-[10px] tracking-wider transition shrink-0 shadow-sm flex items-center justify-center"
+            >
+              MAPA
+            </a>
+          )}
         </div>
       </div>
     )
@@ -434,6 +496,12 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
               {start !== end && <span className="rounded-full bg-slate-100 px-2 py-0.5">{start} - {end}</span>}
               {task.duration_hours && <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5"><Clock size={12} /> {task.duration_hours}h</span>}
               {task.description && <span className="inline-flex max-w-full items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5"><MapPin size={12} /> <span className="truncate">{task.description}</span></span>}
+              {task.address && (
+                <a href={getMapsDirectionsUrl(task.address)} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} className="inline-flex items-center gap-1 rounded-full bg-blue-600 px-2 py-0.5 text-white">
+                  <MapPin size={12} />
+                  Trasa
+                </a>
+              )}
             </div>
           </div>
           {task.ticket_number && (
@@ -660,17 +728,27 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
           <div className="flex flex-wrap items-center gap-2">
             {userRole === 'pm' && <select value={activeTechFilterId} onChange={(e) => setActiveTechFilterId(e.target.value)} className="border rounded-lg px-2 py-1.5 text-xs font-bold text-slate-700 outline-none"><option value="">Wszyscy technicy</option>{technicians.map(t => <option key={t.id} value={t.id}>{t.full_name}</option>)}</select>}
             <div className="flex items-center space-x-1">
-              <button type="button" onClick={() => setCurrentDate(new Date(year, month - 1, 1))} className="p-2 bg-slate-100 rounded-lg">◀</button>
+              <button type="button" onClick={() => setCurrentDate(new Date(year, month - 1, 1))} onDragOver={e => e.preventDefault()} onDrop={e => handleBoundaryDrop('previous', e)} className="p-2 bg-slate-100 rounded-lg">◀</button>
               <button type="button" onClick={() => setCurrentDate(new Date())} className="px-3 py-1.5 bg-slate-100 text-xs font-bold rounded-lg">Dzisiaj</button>
-              <button type="button" onClick={() => setCurrentDate(new Date(year, month + 1, 1))} className="p-2 bg-slate-100 rounded-lg">▶</button>
+              <button type="button" onClick={() => setCurrentDate(new Date(year, month + 1, 1))} onDragOver={e => e.preventDefault()} onDrop={e => handleBoundaryDrop('next', e)} className="p-2 bg-slate-100 rounded-lg">▶</button>
             </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <div onDragOver={e => e.preventDefault()} onDrop={e => handleBoundaryDrop('previous', e)} className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-3 text-center text-xs font-black uppercase tracking-wider text-slate-500">
+            Upuść tutaj, żeby przenieść lub rozszerzyć na poprzedni miesiąc
+          </div>
+          <div onDragOver={e => e.preventDefault()} onDrop={e => handleBoundaryDrop('next', e)} className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-3 text-center text-xs font-black uppercase tracking-wider text-slate-500">
+            Upuść tutaj, żeby przenieść lub rozszerzyć na kolejny miesiąc
           </div>
         </div>
 
         {/* SIATKA KALENDARZA */}
         <div className="bg-white rounded-xl shadow-md border border-slate-200 overflow-x-auto">
-          <div className="min-w-[860px]">
-          <div className="grid grid-cols-7 bg-slate-100 border-b text-center py-2 text-xs font-bold text-slate-600 uppercase select-none">
+          <div className="min-w-[920px]">
+          <div className="grid grid-cols-[48px_repeat(7,minmax(0,1fr))] bg-slate-100 border-b text-center py-2 text-xs font-bold text-slate-600 uppercase select-none">
+            <div className="text-slate-400">Tydz.</div>
             {["Pn", "Wt", "Śr", "Cz", "Pt", "Sb", "Nd"].map((d, i) => <div key={i} className={i >= 5 ? "text-red-500" : ""}>{d}</div>)}
           </div>
 
@@ -680,7 +758,10 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
               const lanes = buildWeekLanes(weekDateStrings)
 
               return (
-                <div key={weekIdx} className="grid grid-cols-7 divide-x bg-white">
+                <div key={weekIdx} className="grid grid-cols-[48px_repeat(7,minmax(0,1fr))] divide-x bg-white">
+                  <div className="flex min-h-[142px] items-start justify-center bg-slate-100/80 pt-2 text-xs font-black text-slate-500">
+                    {getIsoWeekNumber(weekDays.find(Boolean))}
+                  </div>
                   {weekDays.map((day, idx) => {
                     if (!day) return <div key={idx} className="min-h-[142px] bg-slate-100/40" />
                     const dateStr = formatDateLocal(day)

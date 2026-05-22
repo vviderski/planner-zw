@@ -244,6 +244,15 @@ export default function ClientManager() {
             .map(name => nextTechnicians.find(tech => normalizeText(tech.full_name) === normalizeText(name))?.id)
             .filter(Boolean)
           const status = normalizeText(row.status) === 'closed' ? 'Zrealizowane' : 'Do realizacji'
+          const address = String(
+            row.address
+            || row.adres
+            || row['adres dojazdu']
+            || row['full address']
+            || row.location
+            || row.lokalizacja
+            || ''
+          ).trim()
 
           return {
             title: taskName,
@@ -253,6 +262,7 @@ export default function ClientManager() {
             end_date: dueDate,
             status,
             description: '',
+            address,
             ticket_number: taskName.match(/\b\d{6,}\b/)?.[0] || null,
             ...buildTechnicianPayload(assignedIds),
           }
@@ -294,6 +304,7 @@ export default function ClientManager() {
       'Kategoria': categories.find(cat => cat.id === task.category_id)?.name || '',
       'Zadanie': task.title,
       'Lokalizacja': task.description || '',
+      'Adres': task.address || '',
       'Technik': getTechnicianFullLabel(task, technicians),
       'Czasochłonność (h)': task.duration_hours || '',
       'Zrealizowane': task.status === 'Zrealizowane' ? 'Tak' : 'Nie',

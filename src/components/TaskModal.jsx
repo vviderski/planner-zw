@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
-import { X } from 'lucide-react'
-import { buildTechnicianPayload, getTaskTechnicianIds } from '../utils/taskUtils'
+import { MapPin, X } from 'lucide-react'
+import { supabase } from '../supabaseClient'
+import { buildTechnicianPayload, getMapsDirectionsUrl, getTaskTechnicianIds } from '../utils/taskUtils'
 
 export default function TaskModal({ 
   isOpen, 
@@ -21,9 +22,11 @@ export default function TaskModal({
   const [startDate, setStartDate] = useState('')
   const [endDate, setEndDate] = useState('')
   const [description, setDescription] = useState('')
+  const [address, setAddress] = useState('')
   const [ticketNumber, setTicketNumber] = useState('')
   const [durationHours, setDurationHours] = useState('')
   const [taskStatus, setTaskStatus] = useState('Do realizacji')
+  const [history, setHistory] = useState([])
 
   const [filteredCategoriesForForm, setFilteredCategoriesForForm] = useState([])
 
@@ -37,11 +40,33 @@ export default function TaskModal({
       setStartDate(selectedTask?.start_date ? selectedTask.start_date.split('T')[0] : '')
       setEndDate(selectedTask?.end_date ? selectedTask.end_date.split('T')[0] : (selectedTask?.start_date ? selectedTask.start_date.split('T')[0] : ''))
       setDescription(selectedTask?.description || '')
+      setAddress(selectedTask?.address || '')
       setTicketNumber(selectedTask?.ticket_number || '')
       setDurationHours(selectedTask?.duration_hours ? selectedTask.duration_hours.toString() : '')
       setTaskStatus(selectedTask?.status || 'Do realizacji')
     }
   }, [isOpen, selectedTask, userRole, currentUserId])
+
+  useEffect(() => {
+    const fetchHistory = async () => {
+      if (!isOpen || !selectedTask?.id) {
+        setHistory([])
+        return
+      }
+
+      const { data, error } = await supabase
+        .from('task_history')
+        .select('*')
+        .eq('task_id', selectedTask.id)
+        .order('created_at', { ascending: false })
+        .limit(20)
+
+      if (!error && data) setHistory(data)
+      else setHistory([])
+    }
+
+    fetchHistory()
+  }, [isOpen, selectedTask?.id])
 
   useEffect(() => {
     if (clientId && clientCategories) {
@@ -73,6 +98,7 @@ export default function TaskModal({
       start_date: startDate,
       end_date: endDate,
       description,
+      address,
       ticket_number: ticketNumber.trim() || null,
       duration_hours: durationHours ? Number(durationHours) : null,
       status: taskStatus
@@ -81,7 +107,7 @@ export default function TaskModal({
 
   return (
     <div className="fixed inset-0 bg-slate-900/60 flex items-center justify-center p-4 z-50">
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6 space-y-4 relative">
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-md max-h-[92vh] overflow-y-auto p-6 space-y-4 relative">
         <button type="button" onClick={onClose} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600"><X size={20} /></button>
         <h3 className="text-base font-black text-slate-900 border-b pb-2">{selectedTask?.id ? 'Karta szczegółów zlecenia' : 'Nowe zlecenie'}</h3>
         
@@ -104,6 +130,13 @@ export default function TaskModal({
               <div><span className="text-slate-400">Temat:</span> {title}</div>
               <div><span className="text-slate-400">Numer SD:</span> #{ticketNumber || 'Brak'}</div>
               <div><span className="text-slate-400">Lokalizacja:</span> {description || 'Brak'}</div>
+              <div><span className="text-slate-400">Adres:</span> {address || 'Brak'}</div>
+              {address && (
+                <a href={getMapsDirectionsUrl(address)} target="_blank" rel="noreferrer" className="mt-2 inline-flex items-center gap-1 rounded-lg bg-blue-600 px-3 py-2 text-xs font-black text-white">
+                  <MapPin size={14} />
+                  Trasa Google Maps
+                </a>
+              )}
               <div><span className="text-slate-400">Termin:</span> {startDate} do {endDate}</div>
             </div>
           ) : (
@@ -155,6 +188,26 @@ export default function TaskModal({
                 </div>
               )}
               <div><label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Miejscowość / Lokalizacja</label><input type="text" value={description} onChange={e => setDescription(e.target.value)} className="w-full p-2 border rounded text-sm" /></div>
+              <div><label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Adres dojazdu</label><input type="text" value={address} onChange={e => setAddress(e.target.value)} className="w-full p-2 border rounded text-sm" placeholder="Ulica, numer, miejscowość" /></div>
+            </div>
+          )}
+
+          {selectedTask?.id && (
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <div className="mb-2 text-[11px] font-black uppercase tracking-wider text-slate-500">Historia kafelki</div>
+              <div className="space-y-2">
+                {history.length > 0 ? history.map(item => (
+                  <div key={item.id} className="rounded border border-slate-200 bg-white p-2 text-xs text-slate-600">
+                    <div className="font-black text-slate-800">{item.action}</div>
+                    <div>{item.details || 'Brak szczegółów'}</div>
+                    <div className="mt-1 text-[10px] font-bold text-slate-400">
+                      {item.actor_name || 'System'} · {item.created_at ? new Date(item.created_at).toLocaleString('pl-PL') : ''}
+                    </div>
+                  </div>
+                )) : (
+                  <div className="text-xs font-semibold text-slate-400">Brak zapisanej historii.</div>
+                )}
+              </div>
             </div>
           )}
 

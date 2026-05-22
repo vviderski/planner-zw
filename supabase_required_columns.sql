@@ -28,9 +28,24 @@ add column if not exists start_date date,
 add column if not exists end_date date,
 add column if not exists client_name text,
 add column if not exists description text,
+add column if not exists address text,
 add column if not exists ticket_number text,
 add column if not exists duration_hours numeric,
 add column if not exists status text not null default 'Do realizacji';
+
+-- HISTORIA KAFELEK
+create table if not exists public.task_history (
+  id bigserial primary key,
+  task_id bigint not null references public.tasks(id) on delete cascade,
+  actor_id uuid references public.profiles(id) on delete set null,
+  actor_name text,
+  action text not null,
+  details text,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists task_history_task_id_created_at_idx
+on public.task_history(task_id, created_at desc);
 
 -- Status jest kontrolowany checkboxem w aplikacji:
 -- niezaznaczony = "Do realizacji", zaznaczony = "Zrealizowane".

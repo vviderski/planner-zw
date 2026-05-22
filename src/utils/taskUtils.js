@@ -45,11 +45,29 @@ export const getTaskCardTitle = (task) => {
   return parts.join(' ')
 }
 
+export const getMapsDirectionsUrl = (address) => {
+  if (!address) return '#'
+  return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(address)}`
+}
+
+export const getIsoWeekNumber = (dateValue) => {
+  const source = dateValue instanceof Date ? dateValue : new Date(`${dateValue}T12:00:00`)
+  const date = new Date(Date.UTC(source.getFullYear(), source.getMonth(), source.getDate()))
+  const dayNum = date.getUTCDay() || 7
+  date.setUTCDate(date.getUTCDate() + 4 - dayNum)
+  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1))
+  return Math.ceil((((date - yearStart) / 86400000) + 1) / 7)
+}
+
 export const getTaskMutationErrorMessage = (error) => {
   const message = error?.message || ''
 
   if (message.includes('technician_ids')) {
     return 'Brakuje kolumny technician_ids w tabeli tasks. Uruchom plik supabase_add_technician_ids.sql w Supabase SQL Editor.'
+  }
+
+  if (message.includes('address')) {
+    return 'Brakuje kolumny address w tabeli tasks. Uruchom plik supabase_required_columns.sql w Supabase SQL Editor.'
   }
 
   return message || 'Nie udało się zapisać zlecenia.'
