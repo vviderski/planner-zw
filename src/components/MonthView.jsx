@@ -401,10 +401,11 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
             onDragStart={e => {
               e.stopPropagation()
               e.dataTransfer.setData('application/json', JSON.stringify({ taskId: task.id, action: 'resize-start' }))
+              e.dataTransfer.setData('text/plain', task.id)
             }}
             onClick={e => e.stopPropagation()}
             title="Zmień datę rozpoczęcia"
-            className="absolute left-0 top-0 h-full w-2 cursor-ew-resize rounded-l bg-white/10 hover:bg-white/30"
+            className="absolute left-0 top-0 h-full w-3 cursor-ew-resize rounded-l bg-white/10 hover:bg-white/30"
           />
         )}
         {isEnd && userRole !== 'technik' && (
@@ -414,10 +415,11 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
             onDragStart={e => {
               e.stopPropagation()
               e.dataTransfer.setData('application/json', JSON.stringify({ taskId: task.id, action: 'resize-end' }))
+              e.dataTransfer.setData('text/plain', task.id)
             }}
             onClick={e => e.stopPropagation()}
             title="Zmień datę zakończenia"
-            className="absolute right-0 top-0 h-full w-2 cursor-ew-resize rounded-r bg-white/10 hover:bg-white/30"
+            className="absolute right-0 top-0 h-full w-3 cursor-ew-resize rounded-r bg-white/10 hover:bg-white/30"
           />
         )}
         <div className="flex items-center gap-1.5">
@@ -527,9 +529,13 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
   if (offset === 0) offset = 7
   offset -= 1
   const gridCells = []
-  for (let i = 0; i < offset; i++) gridCells.push(null)
+  for (let i = 0; i < offset; i++) gridCells.push(new Date(year, month, i - offset + 1))
   for (let d = 1; d <= lastDayStr.getDate(); d++) gridCells.push(new Date(year, month, d))
-  while (gridCells.length % 7 !== 0) gridCells.push(null)
+  let nextMonthDay = 1
+  while (gridCells.length % 7 !== 0) {
+    gridCells.push(new Date(year, month + 1, nextMonthDay))
+    nextMonthDay += 1
+  }
 
   const weekRows = []
   for (let i = 0; i < gridCells.length; i += 7) {
@@ -537,7 +543,7 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
   }
 
   const monthNames = ["Styczeń", "Luty", "Marzec", "Kwiecień", "Maj", "Czerwiec", "Lipiec", "Sierpień", "Wrzesień", "Październik", "Listopad", "Grudzień"]
-  const monthDateStrings = gridCells.filter(Boolean).map(day => formatDateLocal(day))
+  const monthDateStrings = gridCells.filter(day => day.getMonth() === month).map(day => formatDateLocal(day))
 
   if (userRole === 'technik') {
     const monthTasks = tasks
@@ -572,17 +578,17 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
 
         <div className="grid grid-cols-7 gap-1 rounded-2xl border border-slate-200 bg-white p-2 shadow-sm">
           {["Pn", "Wt", "Śr", "Cz", "Pt", "Sb", "Nd"].map(day => <div key={day} className="py-1 text-center text-[10px] font-black uppercase text-slate-400">{day}</div>)}
-          {gridCells.map((day, index) => {
-            if (!day) return <div key={`empty-${index}`} className="aspect-square rounded-lg bg-slate-50" />
+          {gridCells.map((day) => {
             const dateStr = formatDateLocal(day)
             const dayTasks = getTechnicianTasksForDate(dateStr)
             const isToday = dateStr === todayStr
+            const isCurrentMonth = day.getMonth() === month
             return (
               <button
                 key={dateStr}
                 type="button"
                 onClick={() => handleOpenCreateModal(dateStr)}
-                className={`aspect-square rounded-lg border text-center text-xs font-black ${isToday ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-100 bg-white text-slate-600'}`}
+                className={`aspect-square rounded-lg border text-center text-xs font-black ${isToday ? 'border-blue-500 bg-blue-50 text-blue-700' : isCurrentMonth ? 'border-slate-100 bg-white text-slate-600' : 'border-slate-100 bg-slate-50 text-slate-300'}`}
               >
                 <span>{day.getDate()}</span>
                 {dayTasks.length > 0 && <span className={`mx-auto mt-1 block h-1.5 w-1.5 rounded-full ${dayTasks.some(task => task.status !== 'Zrealizowane') ? 'bg-blue-600' : 'bg-emerald-500'}`} />}
@@ -754,17 +760,17 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
 
           <div className="divide-y bg-slate-50">
             {weekRows.map((weekDays, weekIdx) => {
-              const weekDateStrings = weekDays.map(day => day ? formatDateLocal(day) : null)
+              const weekDateStrings = weekDays.map(day => formatDateLocal(day))
               const lanes = buildWeekLanes(weekDateStrings)
 
               return (
                 <div key={weekIdx} className="grid grid-cols-[48px_repeat(7,minmax(0,1fr))] divide-x bg-white">
                   <div className="flex min-h-[142px] items-start justify-center bg-slate-100/80 pt-2 text-xs font-black text-slate-500">
-                    {getIsoWeekNumber(weekDays.find(Boolean))}
+                    {getIsoWeekNumber(weekDays[0])}
                   </div>
                   {weekDays.map((day, idx) => {
-                    if (!day) return <div key={idx} className="min-h-[142px] bg-slate-100/40" />
                     const dateStr = formatDateLocal(day)
+                    const isCurrentMonth = day.getMonth() === month
 
                     return (
                       <div
@@ -777,10 +783,10 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
                           else if (payload.action === 'resize-end') handleResizeTaskDate(payload.taskId, 'end', dateStr)
                           else handleMoveTaskDate(payload.taskId, dateStr)
                         }}
-                        className="group min-h-[142px] overflow-x-visible overflow-y-auto bg-white"
+                        className={`group min-h-[142px] overflow-x-visible overflow-y-auto ${isCurrentMonth ? 'bg-white' : 'bg-slate-50'}`}
                       >
                         <div className="flex justify-between items-center p-1 h-6">
-                          <span className="text-xs font-bold text-slate-400">{day.getDate()}</span>
+                          <span className={`text-xs font-bold ${isCurrentMonth ? 'text-slate-400' : 'text-slate-300'}`}>{day.getDate()}</span>
                           {userRole !== 'technik' && (
                             <button type="button" onClick={() => handleOpenCreateModal(dateStr)} className="opacity-0 group-hover:opacity-100 p-0.5 bg-blue-600 text-white rounded shadow-sm">
                               <Plus size={12} />

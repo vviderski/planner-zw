@@ -1,6 +1,8 @@
 import { supabase } from '../supabaseClient'
 import { getTaskEndDate, getTaskStartDate, getTaskTechnicianIds } from './taskUtils'
 
+let lastHistoryWarningAt = 0
+
 const getActorName = (currentUser) => (
   currentUser?.fullName
   || currentUser?.full_name
@@ -22,7 +24,7 @@ export const getTechnicianNames = (ids, technicians) => {
 }
 
 export const logTaskHistory = async ({ taskId, currentUser, action, details = '' }) => {
-  if (!taskId || !action) return
+  if (!taskId || !action) return true
 
   const { error } = await supabase.from('task_history').insert([{
     task_id: taskId,
@@ -34,7 +36,15 @@ export const logTaskHistory = async ({ taskId, currentUser, action, details = ''
 
   if (error) {
     console.warn('Nie zapisano historii kafelki:', error.message)
+    const now = Date.now()
+    if (typeof window !== 'undefined' && now - lastHistoryWarningAt > 5000) {
+      lastHistoryWarningAt = now
+      window.alert(`Nie zapisano historii kafelki: ${error.message}. Uruchom plik supabase_add_address_and_task_history.sql w Supabase SQL Editor.`)
+    }
+    return false
   }
+
+  return true
 }
 
 export const getTaskChangeHistoryEntries = ({ before, after, technicians = [] }) => {
