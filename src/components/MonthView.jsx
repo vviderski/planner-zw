@@ -5,7 +5,7 @@ import TaskModal from './TaskModal'
 import TaskSearch from './TaskSearch'
 import { buildTechnicianPayload, formatDateLocal, getIsoWeekNumber, getMapsDirectionsUrl, getTaskCardTitle, getTaskEndDate, getTaskMutationErrorMessage, getTaskStartDate, getTaskTechnicianIds, getTechnicianLabel } from '../utils/taskUtils'
 import { getTaskChangeHistoryEntries, logTaskHistory } from '../utils/taskHistory'
-import { notifyTeamsTaskCompleted } from '../utils/teamsNotifications'
+import { notifyTeamsTaskCompleted, notifyTeamsTaskReopened } from '../utils/teamsNotifications'
 
 export default function MonthView({ currentUser: authUser, currentUserRole = 'technik' }) {
   const [tasks, setTasks] = useState([])
@@ -135,6 +135,13 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
         if (currentActiveTask.status !== 'Zrealizowane' && updateData.status === 'Zrealizowane') {
           try {
             await notifyTeamsTaskCompleted({ task: { ...currentActiveTask, ...updateData }, currentUser, technicians })
+          } catch (error) {
+            alert(`Zadanie zapisane, ale nie wysłano powiadomienia Teams: ${error.message}`)
+          }
+        }
+        if (currentActiveTask.status === 'Zrealizowane' && updateData.status === 'Do realizacji') {
+          try {
+            await notifyTeamsTaskReopened({ task: { ...currentActiveTask, ...updateData }, currentUser, technicians })
           } catch (error) {
             alert(`Zadanie zapisane, ale nie wysłano powiadomienia Teams: ${error.message}`)
           }
@@ -302,6 +309,13 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
     if (checked && task.status !== 'Zrealizowane') {
       try {
         await notifyTeamsTaskCompleted({ task: { ...task, status: 'Zrealizowane' }, currentUser, technicians })
+      } catch (error) {
+        alert(`Zadanie zapisane, ale nie wysłano powiadomienia Teams: ${error.message}`)
+      }
+    }
+    if (!checked && task.status === 'Zrealizowane') {
+      try {
+        await notifyTeamsTaskReopened({ task: { ...task, status: 'Do realizacji' }, currentUser, technicians })
       } catch (error) {
         alert(`Zadanie zapisane, ale nie wysłano powiadomienia Teams: ${error.message}`)
       }

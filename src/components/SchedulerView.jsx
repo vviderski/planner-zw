@@ -4,7 +4,7 @@ import { Plus, X, Save, ChevronLeft, ChevronRight, CalendarDays, Clock, MapPin }
 import TaskSearch from './TaskSearch'
 import { buildTechnicianPayload, getMapsDirectionsUrl, getTaskCardTitle, getTaskEndDate, getTaskMutationErrorMessage, getTaskStartDate, getTaskTechnicianIds } from '../utils/taskUtils'
 import { getTaskChangeHistoryEntries, logTaskHistory } from '../utils/taskHistory'
-import { notifyTeamsTaskCompleted } from '../utils/teamsNotifications'
+import { notifyTeamsTaskCompleted, notifyTeamsTaskReopened } from '../utils/teamsNotifications'
 
 export default function SchedulerView({ currentUser, currentUserRole = 'technik' }) {
   const [tasks, setTasks] = useState([])
@@ -261,6 +261,13 @@ export default function SchedulerView({ currentUser, currentUserRole = 'technik'
         alert(`Zadanie zapisane, ale nie wysłano powiadomienia Teams: ${error.message}`)
       }
     }
+    if (selectedTask.status === 'Zrealizowane' && updatePayload.status === 'Do realizacji') {
+      try {
+        await notifyTeamsTaskReopened({ task: { ...selectedTask, ...updatePayload }, currentUser, technicians })
+      } catch (error) {
+        alert(`Zadanie zapisane, ale nie wysłano powiadomienia Teams: ${error.message}`)
+      }
+    }
     setSelectedTask(null)
     fetchTasks()
   }
@@ -323,6 +330,13 @@ export default function SchedulerView({ currentUser, currentUserRole = 'technik'
     if (checked && task.status !== 'Zrealizowane') {
       try {
         await notifyTeamsTaskCompleted({ task: { ...task, status: 'Zrealizowane' }, currentUser, technicians })
+      } catch (error) {
+        alert(`Zadanie zapisane, ale nie wysłano powiadomienia Teams: ${error.message}`)
+      }
+    }
+    if (!checked && task.status === 'Zrealizowane') {
+      try {
+        await notifyTeamsTaskReopened({ task: { ...task, status: 'Do realizacji' }, currentUser, technicians })
       } catch (error) {
         alert(`Zadanie zapisane, ale nie wysłano powiadomienia Teams: ${error.message}`)
       }
