@@ -3,6 +3,7 @@ import { supabase } from '../supabaseClient'
 import { Plus, X, Save, ChevronLeft, ChevronRight, CalendarDays, Clock, MapPin } from 'lucide-react'
 import { buildTechnicianPayload, getMapsDirectionsUrl, getTaskCardTitle, getTaskEndDate, getTaskMutationErrorMessage, getTaskStartDate, getTaskTechnicianIds } from '../utils/taskUtils'
 import { getTaskChangeHistoryEntries, logTaskHistory } from '../utils/taskHistory'
+import { notifyTeamsTaskCompleted } from '../utils/teamsNotifications'
 
 export default function SchedulerView({ currentUser, currentUserRole = 'technik' }) {
   const [tasks, setTasks] = useState([])
@@ -252,6 +253,13 @@ export default function SchedulerView({ currentUser, currentUserRole = 'technik'
     for (const entry of historyEntries) {
       await logTaskHistory({ taskId: selectedTask.id, currentUser, ...entry })
     }
+    if (selectedTask.status !== 'Zrealizowane' && updatePayload.status === 'Zrealizowane') {
+      try {
+        await notifyTeamsTaskCompleted({ task: { ...selectedTask, ...updatePayload }, currentUser, technicians })
+      } catch (error) {
+        alert(`Zadanie zapisane, ale nie wysłano powiadomienia Teams: ${error.message}`)
+      }
+    }
     setSelectedTask(null)
     fetchTasks()
   }
@@ -311,6 +319,13 @@ export default function SchedulerView({ currentUser, currentUserRole = 'technik'
       action: 'Zmiana statusu',
       details: `${task.status || 'Do realizacji'} -> ${checked ? 'Zrealizowane' : 'Do realizacji'}`,
     })
+    if (checked && task.status !== 'Zrealizowane') {
+      try {
+        await notifyTeamsTaskCompleted({ task: { ...task, status: 'Zrealizowane' }, currentUser, technicians })
+      } catch (error) {
+        alert(`Zadanie zapisane, ale nie wysłano powiadomienia Teams: ${error.message}`)
+      }
+    }
     fetchTasks()
   }
 

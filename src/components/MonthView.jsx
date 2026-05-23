@@ -4,6 +4,7 @@ import { Plus, Building2, ChevronLeft, ChevronRight, CalendarDays, Clock, MapPin
 import TaskModal from './TaskModal'
 import { buildTechnicianPayload, formatDateLocal, getIsoWeekNumber, getMapsDirectionsUrl, getTaskCardTitle, getTaskEndDate, getTaskMutationErrorMessage, getTaskStartDate, getTaskTechnicianIds, getTechnicianLabel } from '../utils/taskUtils'
 import { getTaskChangeHistoryEntries, logTaskHistory } from '../utils/taskHistory'
+import { notifyTeamsTaskCompleted } from '../utils/teamsNotifications'
 
 export default function MonthView({ currentUser: authUser, currentUserRole = 'technik' }) {
   const [tasks, setTasks] = useState([])
@@ -129,6 +130,13 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
         const historyEntries = getTaskChangeHistoryEntries({ before: currentActiveTask, after: { ...currentActiveTask, ...updateData }, technicians })
         for (const entry of historyEntries) {
           await logTaskHistory({ taskId: currentActiveTask.id, currentUser, ...entry })
+        }
+        if (currentActiveTask.status !== 'Zrealizowane' && updateData.status === 'Zrealizowane') {
+          try {
+            await notifyTeamsTaskCompleted({ task: { ...currentActiveTask, ...updateData }, currentUser, technicians })
+          } catch (error) {
+            alert(`Zadanie zapisane, ale nie wysłano powiadomienia Teams: ${error.message}`)
+          }
         }
       }
     } else {
@@ -290,6 +298,13 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
       action: 'Zmiana statusu',
       details: `${task.status || 'Do realizacji'} -> ${checked ? 'Zrealizowane' : 'Do realizacji'}`,
     })
+    if (checked && task.status !== 'Zrealizowane') {
+      try {
+        await notifyTeamsTaskCompleted({ task: { ...task, status: 'Zrealizowane' }, currentUser, technicians })
+      } catch (error) {
+        alert(`Zadanie zapisane, ale nie wysłano powiadomienia Teams: ${error.message}`)
+      }
+    }
     fetchTasks()
   }
 
