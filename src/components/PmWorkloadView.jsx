@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { BarChart3, ChevronLeft, ChevronRight } from 'lucide-react'
 import { supabase } from '../supabaseClient'
 import { getTaskEndDate, getTaskStartDate, getTaskTechnicianIds } from '../utils/taskUtils'
+import TaskSearch from './TaskSearch'
 
 export default function PmWorkloadView() {
   const [tasks, setTasks] = useState([])
@@ -109,8 +110,15 @@ export default function PmWorkloadView() {
     setCurrentDate(nextDate)
   }
 
+  const handleSearchSelectTask = (task) => {
+    const startDate = getTaskStartDate(task)
+    if (startDate) setCurrentDate(new Date(`${startDate}T12:00:00`))
+  }
+
   return (
     <div className="space-y-6">
+      <TaskSearch tasks={tasks} technicians={technicians} onSelectTask={handleSearchSelectTask} />
+
       <div className="bg-white p-4 rounded-xl shadow-md border border-slate-200 flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
         <div>
           <div className="flex items-center gap-3">

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../supabaseClient'
 import { Plus, Building2, ChevronLeft, ChevronRight, CalendarDays, Clock, MapPin } from 'lucide-react'
 import TaskModal from './TaskModal'
+import TaskSearch from './TaskSearch'
 import { buildTechnicianPayload, formatDateLocal, getIsoWeekNumber, getMapsDirectionsUrl, getTaskCardTitle, getTaskEndDate, getTaskMutationErrorMessage, getTaskStartDate, getTaskTechnicianIds, getTechnicianLabel } from '../utils/taskUtils'
 import { getTaskChangeHistoryEntries, logTaskHistory } from '../utils/taskHistory'
 import { notifyTeamsTaskCompleted } from '../utils/teamsNotifications'
@@ -114,7 +115,7 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
   }
 
   const handleOpenDetails = (task, e) => {
-    e.stopPropagation()
+    e?.stopPropagation()
     setCurrentActiveTask(task)
     setModalOpen(true)
   }
@@ -570,6 +571,14 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
 
     return (
       <div className="mx-auto max-w-3xl space-y-4 pb-20">
+        <TaskSearch
+          tasks={tasks}
+          technicians={technicians}
+          currentUserId={currentUser?.id}
+          userRole={userRole}
+          onSelectTask={handleOpenDetails}
+        />
+
         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="flex items-start justify-between gap-3">
             <div>
@@ -690,6 +699,13 @@ export default function MonthView({ currentUser: authUser, currentUserRole = 'te
 
       {/* KALENDARZ */}
       <div className={`${userRole === 'pm' ? 'xl:col-span-4' : 'xl:col-span-5'} space-y-4 min-w-0`}>
+        <TaskSearch
+          tasks={tasks}
+          technicians={technicians}
+          currentUserId={currentUser?.id}
+          userRole={userRole}
+          onSelectTask={handleOpenDetails}
+        />
         {/*
           <div className="bg-white p-4 rounded-xl shadow-md border border-slate-200 space-y-3 select-none">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">

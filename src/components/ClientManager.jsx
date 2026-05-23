@@ -51,7 +51,34 @@ const parseDateValue = (value) => {
 const splitAssignees = (value) => String(value || '')
   .split(/[,;]+/)
   .map(name => name.trim().replace(/\s+/g, ' '))
-  .filter(Boolean)
+  .filter(name => name && normalizeText(name) !== 'brak')
+
+const getFirstValue = (row, keys) => {
+  for (const key of keys) {
+    const value = row[key]
+    if (value !== undefined && value !== null && String(value).trim() !== '') return value
+  }
+  return ''
+}
+
+const normalizeStatus = (value) => {
+  const status = normalizeText(value)
+  if (['closed', 'done', 'resolved', 'zrealizowane', 'tak'].includes(status)) return 'Zrealizowane'
+  if (['cancelled', 'canceled', 'anulowane', 'anulowany', 'rejected'].includes(status)) return 'Anulowane'
+  return 'Do realizacji'
+}
+
+const buildExternalKey = ({ clientName, storeNumber, title }) => {
+  const parts = [clientName, storeNumber, title].map(normalizeText).filter(Boolean)
+  return parts.length >= 2 ? parts.join('|') : ''
+}
+
+const extractStoreNumber = (row, taskName) => {
+  const explicit = String(getFirstValue(row, ['store number', 'shop number', 'numer sklepu', 'sklep', 'store', 'nr sklepu']) || '').trim()
+  if (explicit) return explicit
+
+  return String(taskName || '').match(/\b(?:sklep|store|nr)\s*[:#-]?\s*([a-z0-9-]{2,})\b/i)?.[1] || ''
+}
 
 const getTechnicianFullLabel = (task, technicians) => {
   const names = getTaskTechnicianIds(task)
@@ -84,6 +111,7 @@ export default function ClientManager() {
   const [clearStartDate, setClearStartDate] = useState(initialRange.start)
   const [clearEndDate, setClearEndDate] = useState(initialRange.end)
   const [adminMessage, setAdminMessage] = useState('')
+  const [importSummary, setImportSummary] = useState(null)
   const fileInputRef = useRef(null)
 
   useEffect(() => {
@@ -172,7 +200,10 @@ export default function ClientManager() {
   const getRowsFromWorkbook = (workbook) => {
     const worksheet = workbook.Sheets[workbook.SheetNames[0]]
     const matrix = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: '', raw: true })
-    const headerIndex = matrix.findIndex(row => row.some(cell => normalizeText(cell) === 'task name' || normalizeText(cell) === 'summary'))
+    const headerIndex = matrix.findIndex(row => row.some(cell => {
+      const header = normalizeText(cell)
+      return ['task name', 'summary', 'zadanie', 'planner id', 'id servicedesk'].includes(header)
+    }))
     if (headerIndex === -1) return []
 
     const headers = matrix[headerIndex].map(normalizeText)
@@ -229,58 +260,137 @@ export default function ClientManager() {
     reader.onload = async (evt) => {
       try {
         setAdminMessage('')
+        setImportSummary(null)
         const workbook = XLSX.read(evt.target.result, { type: 'binary', cellDates: true })
         const rows = getRowsFromWorkbook(workbook)
-        const assigneeNames = rows.flatMap(row => splitAssignees(row.assignee || row['assigned to'] || row['assign to']))
+        const assigneeNames = rows.flatMap(row => splitAssignees(row.assignee || row['assigned to'] || row['assign to'] || row.technik))
         const nextTechnicians = await ensureTechnicians(assigneeNames)
+        const { data: latestTasks, error: latestTasksError } = await supabase.from('tasks').select('*')
+        if (latestTasksError) throw latestTasksError
+        const sourceTasks = latestTasks || tasks
 
-        const tasksToInsert = rows.map(row => {
-          const taskName = String(row['task name'] || row.summary || row.zadanie || '').trim()
-          const dueDate = parseDateValue(row['due date'] || row['fixed date'] || row.start || row.data)
-          if (!taskName || !dueDate) return null
+        const importedRows = rows.map(row => {
+          const plannerId = Number(getFirstValue(row, ['planner id', 'planner_id', 'id kafelki']))
+          const taskName = String(getFirstValue(row, ['task name', 'summary', 'zadanie', 'nazwa zadania']) || '').trim()
+          const startDate = parseDateValue(getFirstValue(row, ['start', 'due date', 'fixed date', 'data']))
+          const endDate = parseDateValue(getFirstValue(row, ['koniec', 'end', 'end date'])) || startDate
+          if (!taskName || !startDate) return null
 
           const matchedClient = findClientForTask(taskName, row.client || row.klient)
-          const assignedIds = splitAssignees(row.assignee || row['assigned to'] || row['assign to'])
+          const assignedIds = splitAssignees(row.assignee || row['assigned to'] || row['assign to'] || row.technik)
             .map(name => nextTechnicians.find(tech => normalizeText(tech.full_name) === normalizeText(name))?.id)
             .filter(Boolean)
-          const status = normalizeText(row.status) === 'closed' ? 'Zrealizowane' : 'Do realizacji'
-          const address = String(
-            row.address
-            || row.adres
-            || row['adres dojazdu']
-            || row['full address']
-            || row.location
-            || row.lokalizacja
-            || ''
-          ).trim()
+          const status = normalizeStatus(getFirstValue(row, ['status', 'zrealizowane']))
+          const ticketNumber = String(getFirstValue(row, ['id (servicedesk)', 'id servicedesk', 'ticket number', 'numer zgloszenia', 'numer zgłoszenia', 'sd']) || taskName.match(/\b\d{6,}\b/)?.[0] || '').trim() || null
+          const storeNumber = extractStoreNumber(row, taskName)
+          const address = String(getFirstValue(row, ['address', 'adres', 'adres dojazdu', 'full address', 'location', 'lokalizacja']) || '').trim()
+          const clientName = matchedClient ? matchedClient.name : String(row.client || row.klient || 'Brak')
+          const externalKey = buildExternalKey({ clientName, storeNumber, title: taskName })
 
           return {
+            plannerId: Number.isFinite(plannerId) ? plannerId : null,
             title: taskName,
             client_id: matchedClient ? matchedClient.id : null,
-            client_name: matchedClient ? matchedClient.name : (row.client || row.klient || 'Brak'),
-            start_date: dueDate,
-            end_date: dueDate,
+            client_name: clientName,
+            start_date: startDate,
+            end_date: endDate,
             status,
-            description: '',
+            description: String(getFirstValue(row, ['lokalizacja', 'miejscowosc', 'miejscowość']) || '').trim(),
             address,
-            ticket_number: taskName.match(/\b\d{6,}\b/)?.[0] || null,
-            ...buildTechnicianPayload(assignedIds),
+            ticket_number: ticketNumber,
+            store_number: storeNumber,
+            external_key: externalKey,
+            duration_hours: Number(getFirstValue(row, ['czasochłonnosc (h)', 'czasochlonnosc (h)', 'czasochlonnosc h', 'czasochłonność h', 'duration_hours', 'duration hours'])) || null,
+            ...(assignedIds.length > 0 ? buildTechnicianPayload(assignedIds) : {}),
           }
         }).filter(Boolean)
 
-        if (tasksToInsert.length === 0) {
+        if (importedRows.length === 0) {
           alert('Nie znaleziono kafelek do importu.')
           return
         }
 
-        const { error } = await supabase.from('tasks').insert(tasksToInsert)
-        if (error) {
-          alert(getTaskMutationErrorMessage(error))
-          return
+        const findMatchingTask = (row) => {
+          if (row.plannerId) {
+            const byPlannerId = sourceTasks.find(task => Number(task.id) === row.plannerId)
+            if (byPlannerId) return { task: byPlannerId }
+          }
+
+          if (row.ticket_number) {
+            const byTicket = sourceTasks.filter(task => normalizeText(task.ticket_number) === normalizeText(row.ticket_number))
+            if (byTicket.length === 1) return { task: byTicket[0] }
+            if (byTicket.length > 1) return { conflict: `kilka kafelek z numerem SD ${row.ticket_number}` }
+          }
+
+          if (row.external_key) {
+            const byExternalKey = sourceTasks.filter(task => normalizeText(task.external_key) === normalizeText(row.external_key))
+            if (byExternalKey.length === 1) return { task: byExternalKey[0] }
+            if (byExternalKey.length > 1) return { conflict: `kilka kafelek dla klucza ${row.external_key}` }
+          }
+
+          const fallbackMatches = sourceTasks.filter(task => (
+            normalizeText(task.client_name) === normalizeText(row.client_name)
+            && normalizeText(task.title) === normalizeText(row.title)
+            && (!row.store_number || normalizeText(task.store_number) === normalizeText(row.store_number))
+          ))
+          if (fallbackMatches.length === 1) return { task: fallbackMatches[0] }
+          if (fallbackMatches.length > 1) return { conflict: `kilka podobnych kafelek: ${row.client_name} / ${row.title}` }
+
+          return { task: null }
         }
 
-        alert(`Zaimportowano ${tasksToInsert.length} kafelek.`)
-        setAdminMessage(`Zaimportowano ${tasksToInsert.length} kafelek. Dodano nowych techników: ${Math.max(0, nextTechnicians.length - technicians.length)}.`)
+        let insertedCount = 0
+        let updatedCount = 0
+        let skippedCount = 0
+        const conflictMessages = []
+
+        for (const row of importedRows) {
+          const payload = { ...row }
+          delete payload.plannerId
+          const match = findMatchingTask(row)
+
+          if (match.conflict) {
+            skippedCount += 1
+            conflictMessages.push({
+              row: row.title,
+              reason: match.conflict,
+              client: row.client_name,
+              ticket: row.ticket_number,
+              store: row.store_number,
+            })
+            continue
+          }
+
+          if (match.task) {
+            const updatePayload = {
+              ...payload,
+              description: payload.description || match.task.description || '',
+              address: payload.address || match.task.address || '',
+              ticket_number: payload.ticket_number || match.task.ticket_number || null,
+              store_number: payload.store_number || match.task.store_number || '',
+              external_key: payload.external_key || match.task.external_key || '',
+              duration_hours: payload.duration_hours || match.task.duration_hours || null,
+              ...(!payload.technician_ids ? buildTechnicianPayload(getTaskTechnicianIds(match.task)) : {}),
+            }
+            const { error } = await supabase.from('tasks').update(updatePayload).eq('id', match.task.id)
+            if (error) throw error
+            updatedCount += 1
+          } else {
+            const { error } = await supabase.from('tasks').insert([payload])
+            if (error) throw error
+            insertedCount += 1
+          }
+        }
+
+        const summary = `Import zakończony. Dodano: ${insertedCount}. Zaktualizowano: ${updatedCount}. Pominięto: ${skippedCount}. Dodano nowych techników: ${Math.max(0, nextTechnicians.length - technicians.length)}.`
+        alert(summary)
+        setImportSummary({
+          insertedCount,
+          updatedCount,
+          skippedCount,
+          newTechniciansCount: Math.max(0, nextTechnicians.length - technicians.length),
+          conflicts: conflictMessages,
+        })
         fetchTasks()
         fetchTechnicians()
       } catch (error) {
@@ -299,8 +409,10 @@ export default function ClientManager() {
       .filter(t => exportClientIds.length === 0 || exportClientIds.includes(Number(t.client_id)))
 
     const excelRows = filteredTasks.map(task => ({
+      'Planner ID': task.id,
       'ID (ServiceDesk)': task.ticket_number || '',
       'Klient': task.client_name || 'Brak',
+      'Numer sklepu': task.store_number || '',
       'Kategoria': categories.find(cat => cat.id === task.category_id)?.name || '',
       'Zadanie': task.title,
       'Lokalizacja': task.description || '',
@@ -308,7 +420,7 @@ export default function ClientManager() {
       'Technik': getTechnicianFullLabel(task, technicians),
       'Czasochłonność (h)': task.duration_hours || '',
       'Zrealizowane': task.status === 'Zrealizowane' ? 'Tak' : 'Nie',
-      'Status': task.status === 'Zrealizowane' ? 'Zrealizowane' : 'Do realizacji',
+      'Status': task.status || 'Do realizacji',
       'Start': getTaskStartDate(task),
       'Koniec': getTaskEndDate(task),
     }))
@@ -317,6 +429,23 @@ export default function ClientManager() {
     const workbook = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Harmonogram')
     XLSX.writeFile(workbook, `Harmonogram_${rangeStart}_${rangeEnd}.xlsx`)
+  }
+
+  const handleExportSkippedImportRows = () => {
+    if (!importSummary?.conflicts?.length) return
+
+    const excelRows = importSummary.conflicts.map(item => ({
+      'Powód': item.reason,
+      'Klient': item.client || '',
+      'ID (ServiceDesk)': item.ticket || '',
+      'Numer sklepu': item.store || '',
+      'Zadanie': item.row || '',
+    }))
+
+    const worksheet = XLSX.utils.json_to_sheet(excelRows)
+    const workbook = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Pominiete')
+    XLSX.writeFile(workbook, `Pominiete_kafelki_${formatDateLocal(new Date())}.xlsx`)
   }
 
   const handleClearClientTasks = async () => {
@@ -346,6 +475,7 @@ export default function ClientManager() {
       return
     }
 
+    setImportSummary(null)
     setAdminMessage(`Usunięto ${tasksToDelete.length} kafelek klienta ${client?.name || ''}.`)
     fetchTasks()
   }
@@ -431,12 +561,12 @@ export default function ClientManager() {
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <h3 className="text-sm font-black text-slate-900">Import / eksport / czyszczenie</h3>
-            <p className="text-[11px] text-slate-500">Import obsługuje kolumny: Task Name, Status, Assignee, Due Date.</p>
+            <p className="text-[11px] text-slate-500">Import dodaje nowe kafelki albo aktualizuje istniejące po Planner ID, numerze SD lub kluczu klient + numer sklepu + zadanie.</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <button type="button" onClick={() => fileInputRef.current.click()} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-lg shadow-sm flex items-center gap-1.5">
               <Upload size={14} />
-              Importuj XLS
+              Importuj / aktualizuj XLS
             </button>
             <button type="button" onClick={handleExportToExcel} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-lg shadow-sm flex items-center gap-1.5">
               <Download size={14} />
@@ -446,7 +576,65 @@ export default function ClientManager() {
           <input type="file" ref={fileInputRef} accept=".xlsx, .xls, .csv" onChange={handleScheduleImport} className="hidden" />
         </div>
 
-        {adminMessage && <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-800">{adminMessage}</div>}
+        {importSummary && (
+          <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-950">
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <div className="rounded-lg bg-white/80 p-2">
+                <div className="text-[10px] font-black uppercase text-emerald-600">Dodano</div>
+                <div className="text-xl font-black">{importSummary.insertedCount}</div>
+              </div>
+              <div className="rounded-lg bg-white/80 p-2">
+                <div className="text-[10px] font-black uppercase text-emerald-600">Zaktualizowano</div>
+                <div className="text-xl font-black">{importSummary.updatedCount}</div>
+              </div>
+              <div className="rounded-lg bg-white/80 p-2">
+                <div className="text-[10px] font-black uppercase text-amber-600">Pominięto</div>
+                <div className="text-xl font-black">{importSummary.skippedCount}</div>
+              </div>
+              <div className="rounded-lg bg-white/80 p-2">
+                <div className="text-[10px] font-black uppercase text-emerald-600">Nowi technicy</div>
+                <div className="text-xl font-black">{importSummary.newTechniciansCount}</div>
+              </div>
+            </div>
+            {importSummary.conflicts.length > 0 && (
+              <details className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-950">
+                <summary className="cursor-pointer text-xs font-black uppercase tracking-wider">
+                  <span>Do sprawdzenia: {importSummary.conflicts.length}</span>
+                </summary>
+                <button type="button" onClick={handleExportSkippedImportRows} className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-2 text-xs font-black text-white hover:bg-amber-700">
+                  <Download size={14} />
+                  Eksportuj pominięte XLS
+                </button>
+                <div className="mt-3 max-h-64 overflow-y-auto rounded-lg border border-amber-100 bg-white">
+                  <table className="w-full text-left text-xs">
+                    <thead className="sticky top-0 bg-amber-100 text-[10px] uppercase text-amber-800">
+                      <tr>
+                        <th className="p-2">Powód</th>
+                        <th className="p-2">Klient</th>
+                        <th className="p-2">SD</th>
+                        <th className="p-2">Sklep</th>
+                        <th className="p-2">Zadanie</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-amber-100">
+                      {importSummary.conflicts.map((item, index) => (
+                        <tr key={`${item.reason}-${index}`}>
+                          <td className="p-2 font-bold text-amber-900">{item.reason}</td>
+                          <td className="p-2">{item.client || 'Brak'}</td>
+                          <td className="p-2">{item.ticket || 'Brak'}</td>
+                          <td className="p-2">{item.store || 'Brak'}</td>
+                          <td className="p-2">{item.row || 'Brak'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </details>
+            )}
+          </div>
+        )}
+
+        {adminMessage && !importSummary && <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-800">{adminMessage}</div>}
 
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 border-t pt-4">
           <div className="space-y-3">

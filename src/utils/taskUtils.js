@@ -70,5 +70,13 @@ export const getTaskMutationErrorMessage = (error) => {
     return 'Brakuje kolumny address w tabeli tasks. Uruchom plik supabase_required_columns.sql w Supabase SQL Editor.'
   }
 
+  if (message.includes('store_number') || message.includes('external_key')) {
+    return 'Brakuje kolumn store_number/external_key w tabeli tasks. Uruchom plik supabase_add_import_update_fields.sql w Supabase SQL Editor.'
+  }
+
+  if (message.includes('tasks_status_check')) {
+    return 'Status Anulowane nie jest jeszcze dopuszczony w bazie. Uruchom plik supabase_add_import_update_fields.sql w Supabase SQL Editor.'
+  }
+
   return message || 'Nie udało się zapisać zlecenia.'
 }

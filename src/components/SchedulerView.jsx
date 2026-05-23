@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../supabaseClient'
 import { Plus, X, Save, ChevronLeft, ChevronRight, CalendarDays, Clock, MapPin } from 'lucide-react'
+import TaskSearch from './TaskSearch'
 import { buildTechnicianPayload, getMapsDirectionsUrl, getTaskCardTitle, getTaskEndDate, getTaskMutationErrorMessage, getTaskStartDate, getTaskTechnicianIds } from '../utils/taskUtils'
 import { getTaskChangeHistoryEntries, logTaskHistory } from '../utils/taskHistory'
 import { notifyTeamsTaskCompleted } from '../utils/teamsNotifications'
@@ -461,6 +462,14 @@ export default function SchedulerView({ currentUser, currentUserRole = 'technik'
 
     return (
       <div className="mx-auto max-w-3xl space-y-4 pb-20">
+        <TaskSearch
+          tasks={tasks}
+          technicians={technicians}
+          currentUserId={currentUser?.id}
+          userRole={userRole}
+          onSelectTask={handleOpenDetails}
+        />
+
         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="flex items-start justify-between gap-3">
             <div>
@@ -558,6 +567,14 @@ export default function SchedulerView({ currentUser, currentUserRole = 'technik'
 
   return (
     <div className="space-y-6">
+      <TaskSearch
+        tasks={tasks}
+        technicians={technicians}
+        currentUserId={currentUser?.id}
+        userRole={userRole}
+        onSelectTask={handleOpenDetails}
+      />
+
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-white p-4 rounded-xl shadow-md border border-slate-200">
         <div>
           <div className="flex items-center space-x-3">
