@@ -8,11 +8,13 @@ import PmWorkloadView from './components/PmWorkloadView'
 import TeamManager from './components/TeamManager'
 import MonthView from './components/MonthView'
 import ClientManager from './components/ClientManager'
+import ComplaintsView from './components/ComplaintsView'
+import DashboardZw from './components/DashboardZw'
 
 function App() {
   const [user, setUser] = useState(null)
   const [profile, setProfile] = useState(null)
-  const [activeTab, setActiveTab] = useState('workload') 
+  const [activeTab, setActiveTab] = useState('dashboard') 
   const userRole = profile?.role || 'technik'
 
   useEffect(() => {
@@ -42,10 +44,11 @@ function App() {
   }, [user?.id])
 
   useEffect(() => {
-    if (userRole !== 'pm' && (activeTab === 'pmWorkload' || activeTab === 'clients' || activeTab === 'team')) {
+    if (!profile) return
+    if (userRole !== 'pm' && (activeTab === 'dashboard' || activeTab === 'pmWorkload' || activeTab === 'clients' || activeTab === 'team' || activeTab === 'complaints')) {
       setActiveTab('workload')
     }
-  }, [activeTab, userRole])
+  }, [activeTab, profile, userRole])
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-800 flex flex-col font-sans">
@@ -56,6 +59,14 @@ function App() {
             <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:space-x-6">
               <span className="text-xl font-black tracking-wider text-blue-400">PLANNER ZW</span>
               <nav className="flex gap-2 overflow-x-auto pb-1 lg:pb-0">
+                {userRole === 'pm' && (
+                  <button
+                    onClick={() => setActiveTab('dashboard')}
+                    className={`px-4 py-1.5 rounded text-sm font-medium transition whitespace-nowrap ${activeTab === 'dashboard' ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-800'}`}
+                  >
+                    Dashboard ZW
+                  </button>
+                )}
                 <button
                   onClick={() => setActiveTab('workload')}
                   className={`px-4 py-1.5 rounded text-sm font-medium transition whitespace-nowrap ${activeTab === 'workload' ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-800'}`}
@@ -83,6 +94,12 @@ function App() {
                       Baza Klientów
                     </button>
                     <button
+                      onClick={() => setActiveTab('complaints')}
+                      className={`px-4 py-1.5 rounded text-sm font-medium transition whitespace-nowrap ${activeTab === 'complaints' ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-800'}`}
+                    >
+                      Reklamacje
+                    </button>
+                    <button
                       onClick={() => setActiveTab('team')}
                       className={`px-4 py-1.5 rounded text-sm font-medium transition whitespace-nowrap ${activeTab === 'team' ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-800'}`}
                     >
@@ -105,10 +122,12 @@ function App() {
 
           {/* GŁÓWNA ZAWARTOŚĆ STRONY */}
           <main className="flex-1 p-3 sm:p-6 min-w-0">
+            {activeTab === 'dashboard' && userRole === 'pm' && <DashboardZw />}
             {activeTab === 'workload' && <SchedulerView currentUser={user} currentUserRole={userRole} />}
             {activeTab === 'pmWorkload' && userRole === 'pm' && <PmWorkloadView />}
             {activeTab === 'month' && <MonthView currentUser={user} currentUserRole={userRole} />}
             {activeTab === 'clients' && userRole === 'pm' && <ClientManager />}
+            {activeTab === 'complaints' && userRole === 'pm' && <ComplaintsView />}
             {activeTab === 'team' && userRole === 'pm' && <TeamManager currentUser={user} />}
           </main>
         </>

@@ -1,10 +1,20 @@
 import { useEffect, useMemo, useState } from 'react'
-import { BarChart3, ChevronLeft, ChevronRight } from 'lucide-react'
+import { BarChart3, ChevronLeft, ChevronRight, Download } from 'lucide-react'
+import * as XLSX from 'xlsx'
 import { supabase } from '../supabaseClient'
 import { getTaskDurationHours, getTaskEndDate, getTaskStartDate, getTaskTechnicianIds, isAdminAvailabilityTask } from '../utils/taskUtils'
 import TaskSearch from './TaskSearch'
 
 const DAILY_WORK_HOURS = 8
+
+const toIsoDate = (date) => {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+const parseIsoDate = (dateStr) => new Date(`${dateStr}T12:00:00`)
 
 export default function PmWorkloadView() {
   const [tasks, setTasks] = useState([])
@@ -13,6 +23,11 @@ export default function PmWorkloadView() {
   const [clientCategories, setClientCategories] = useState([])
   const [activeClientId, setActiveClientId] = useState('')
   const [currentDate, setCurrentDate] = useState(new Date())
+  const [reportStartDate, setReportStartDate] = useState(() => {
+    const now = new Date()
+    return toIsoDate(new Date(now.getFullYear(), now.getMonth(), 1))
+  })
+  const [reportEndDate, setReportEndDate] = useState(() => toIsoDate(new Date()))
 
   const getWeekDaysLocal = (baseDate) => {
     const current = new Date(baseDate)
@@ -164,6 +179,155 @@ export default function PmWorkloadView() {
     if (startDate) setCurrentDate(new Date(`${startDate}T12:00:00`))
   }
 
+  const getReportWeeks = (startDate, endDate) => {
+    const start = parseIsoDate(startDate)
+    const end = parseIsoDate(endDate)
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) return []
+
+    const cursor = new Date(start)
+    const day = cursor.getDay()
+    cursor.setDate(cursor.getDate() - day + (day === 0 ? -6 : 1))
+
+    const weeks = []
+    while (cursor <= end) {
+      const weekDaysInRange = Array.from({ length: 7 }, (_, idx) => {
+        const date = new Date(cursor)
+        date.setDate(cursor.getDate() + idx)
+        return toIsoDate(date)
+      }).filter(dateStr => dateStr >= startDate && dateStr <= endDate)
+
+      if (weekDaysInRange.length > 0) {
+        weeks.push({
+          weekNumber: getWeekNumber(cursor),
+          year: cursor.getFullYear(),
+          days: weekDaysInRange,
+          start: weekDaysInRange[0],
+          end: weekDaysInRange[weekDaysInRange.length - 1],
+        })
+      }
+
+      cursor.setDate(cursor.getDate() + 7)
+    }
+
+    return weeks
+  }
+
+  const calculateWorkloadForDays = (days, clientId = '') => {
+    const rangeStart = days[0]
+    const rangeEnd = days[days.length - 1]
+    const rangeWorkDays = days.filter(isWorkday)
+    const rangeTasks = tasks.filter(task => getTaskStartDate(task) <= rangeEnd && getTaskEndDate(task) >= rangeStart)
+    const visibleRangeTasks = rangeTasks.filter(task => !clientId || Number(task.client_id) === Number(clientId))
+    const rangeWorkloadTasks = visibleRangeTasks.filter(task => !isAdminAvailabilityTask(task, clientCategories))
+    const rangeUnassignedTasks = rangeWorkloadTasks.filter(task => getTaskTechnicianIds(task).length === 0)
+    const rangeAssignedTasks = rangeWorkloadTasks.filter(task => getTaskTechnicianIds(task).length > 0)
+
+    const stats = technicians.map(technician => {
+      const assignedWorkloadTasks = rangeWorkloadTasks.filter(task => getTaskTechnicianIds(task).includes(technician.id))
+      const availabilityTasks = rangeTasks.filter(task => (
+        getTaskTechnicianIds(task).includes(technician.id)
+        && isAdminAvailabilityTask(task, clientCategories)
+      ))
+      const totalHours = assignedWorkloadTasks.reduce((sum, task) => sum + getTaskDurationHours(task, clientCategories, DAILY_WORK_HOURS), 0)
+      const unavailableHours = availabilityTasks.reduce((sum, task) => sum + getTaskDurationHours(task, clientCategories, DAILY_WORK_HOURS), 0)
+      const availableHours = Math.max(0, (rangeWorkDays.length * DAILY_WORK_HOURS) - unavailableHours)
+      const doneCount = assignedWorkloadTasks.filter(task => task.status === 'Zrealizowane').length
+
+      return {
+        technician,
+        taskCount: assignedWorkloadTasks.length,
+        doneCount,
+        openCount: assignedWorkloadTasks.length - doneCount,
+        totalHours,
+        unavailableHours,
+        availableHours,
+        plannedPersonDays: totalHours / DAILY_WORK_HOURS,
+        availablePersonDays: availableHours / DAILY_WORK_HOURS,
+        utilizationPercent: availableHours > 0 ? Math.round((totalHours / availableHours) * 100) : (totalHours > 0 ? 100 : 0),
+      }
+    })
+
+    const totalHoursForRange = stats.reduce((sum, stat) => sum + stat.totalHours, 0)
+    const availableHoursForRange = stats.reduce((sum, stat) => sum + stat.availableHours, 0)
+    const unavailableHoursForRange = stats.reduce((sum, stat) => sum + stat.unavailableHours, 0)
+
+    return {
+      stats,
+      assignedTasksCount: rangeAssignedTasks.length,
+      unassignedTasksCount: rangeUnassignedTasks.length,
+      totalTasksCount: rangeAssignedTasks.length + rangeUnassignedTasks.length,
+      totalHours: totalHoursForRange,
+      rawAvailableHours: technicians.length * rangeWorkDays.length * DAILY_WORK_HOURS,
+      availableHours: availableHoursForRange,
+      unavailableHours: unavailableHoursForRange,
+      plannedPersonDays: totalHoursForRange / DAILY_WORK_HOURS,
+      availablePersonDays: availableHoursForRange / DAILY_WORK_HOURS,
+      utilizationPercent: availableHoursForRange > 0 ? Math.round((totalHoursForRange / availableHoursForRange) * 100) : 0,
+    }
+  }
+
+  const handleExportWorkloadReport = () => {
+    if (!reportStartDate || !reportEndDate || reportStartDate > reportEndDate) {
+      alert('Wybierz poprawny zakres dat raportu.')
+      return
+    }
+
+    const weeks = getReportWeeks(reportStartDate, reportEndDate)
+    if (weeks.length === 0) {
+      alert('Brak tygodni do raportu w wybranym zakresie.')
+      return
+    }
+
+    const selectedClient = clients.find(client => Number(client.id) === Number(activeClientId))
+    const summaryRows = []
+    const technicianRows = []
+
+    weeks.forEach(week => {
+      const report = calculateWorkloadForDays(week.days, activeClientId)
+      summaryRows.push({
+        'Rok': week.year,
+        'Tydzien roku': week.weekNumber,
+        'Zakres od': week.start,
+        'Zakres do': week.end,
+        'Klient': selectedClient?.name || 'Wszyscy klienci',
+        'Ilosc zadan': report.totalTasksCount,
+        'Ilosc przypisanych': report.assignedTasksCount,
+        'Ilosc nieprzypisanych': report.unassignedTasksCount,
+        'Czasochlonnosc (h)': report.totalHours,
+        'Dostepne roboczogodziny po ADM (h)': report.availableHours,
+        'Pula bazowa roboczogodzin (h)': report.rawAvailableHours,
+        'ADM / niedostepnosc (h)': report.unavailableHours,
+        'Zagospodarowane OSD': report.plannedPersonDays,
+        'Dostepne OSD': report.availablePersonDays,
+        'Wykorzystanie (%)': report.utilizationPercent,
+      })
+
+      report.stats.forEach(stat => {
+        technicianRows.push({
+          'Rok': week.year,
+          'Tydzien roku': week.weekNumber,
+          'Zakres od': week.start,
+          'Zakres do': week.end,
+          'Technik': stat.technician.full_name,
+          'Ilosc zadan': stat.taskCount,
+          'Zrealizowane': stat.doneCount,
+          'Do realizacji': stat.openCount,
+          'Czasochlonnosc (h)': stat.totalHours,
+          'Dostepne roboczogodziny po ADM (h)': stat.availableHours,
+          'ADM / niedostepnosc (h)': stat.unavailableHours,
+          'Zagospodarowane OSD': stat.plannedPersonDays,
+          'Dostepne OSD': stat.availablePersonDays,
+          'Wykorzystanie (%)': stat.utilizationPercent,
+        })
+      })
+    })
+
+    const workbook = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(summaryRows), 'Podsumowanie tygodni')
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(technicianRows), 'Technicy tygodniowo')
+    XLSX.writeFile(workbook, `Workload_PM_${reportStartDate}_${reportEndDate}.xlsx`)
+  }
+
   return (
     <div className="space-y-6">
       <TaskSearch tasks={tasks} technicians={technicians} onSelectTask={handleSearchSelectTask} />
@@ -177,7 +341,7 @@ export default function PmWorkloadView() {
               Tydzien {currentWeekNumber}
             </span>
           </div>
-          <p className="text-sm text-slate-500">Zestawienie liczby zadan, czasochlonnosci oraz dostepnych roboczogodzin technikow w wybranym tygodniu.</p>
+          <p className="text-sm text-slate-500">Zakres widoku: {weekDays[0]} - {weekDays[6]}. Zestawienie liczby zadan, czasochlonnosci oraz dostepnych roboczogodzin technikow.</p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -188,6 +352,29 @@ export default function PmWorkloadView() {
           <button onClick={handlePrevWeek} className="p-2 bg-slate-100 hover:bg-slate-200 rounded-lg text-slate-700 transition"><ChevronLeft size={18} /></button>
           <button onClick={() => setCurrentDate(new Date())} className="px-3 py-2 bg-slate-100 hover:bg-slate-200 rounded-lg text-xs font-bold text-slate-700 transition">Biezacy tydzien</button>
           <button onClick={handleNextWeek} className="p-2 bg-slate-100 hover:bg-slate-200 rounded-lg text-slate-700 transition"><ChevronRight size={18} /></button>
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-md">
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
+          <div>
+            <div className="text-sm font-black uppercase tracking-wider text-slate-900">Raport workload po tygodniach</div>
+            <p className="text-xs font-semibold text-slate-500">Eksportuje podsumowanie tygodniowe i obciazenie kazdego technika dla wybranego zakresu dat.</p>
+          </div>
+          <div className="flex flex-wrap items-end gap-2">
+            <label className="text-xs font-bold text-slate-600">
+              Od
+              <input type="date" value={reportStartDate} onChange={e => setReportStartDate(e.target.value)} className="mt-1 block rounded-lg border px-3 py-2 text-xs font-bold text-slate-700" />
+            </label>
+            <label className="text-xs font-bold text-slate-600">
+              Do
+              <input type="date" value={reportEndDate} onChange={e => setReportEndDate(e.target.value)} className="mt-1 block rounded-lg border px-3 py-2 text-xs font-bold text-slate-700" />
+            </label>
+            <button type="button" onClick={handleExportWorkloadReport} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-xs font-black text-white shadow-sm transition hover:bg-blue-700">
+              <Download size={16} />
+              Eksportuj XLS
+            </button>
+          </div>
         </div>
       </div>
 
