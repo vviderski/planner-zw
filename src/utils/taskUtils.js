@@ -10,6 +10,43 @@ export const getTaskStartDate = (task) => task?.start_date?.split('T')[0] || ''
 
 export const getTaskEndDate = (task) => (task?.end_date || task?.start_date || '').split('T')[0]
 
+export const ADMIN_CLIENT_NAME = 'ADM'
+
+export const ADMIN_ABSENCE_CATEGORY_NAMES = ['serwis pojazdu', 'urlop', 'l4']
+
+const normalizeTaskText = (value) => String(value || '')
+  .toLowerCase()
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .replace(/\s+/g, ' ')
+  .trim()
+
+export const isAdminClientName = (clientName) => normalizeTaskText(clientName) === normalizeTaskText(ADMIN_CLIENT_NAME)
+
+export const isAdminAvailabilityTask = (task, categories = []) => {
+  const category = categories.find(cat => Number(cat.id) === Number(task?.category_id))
+  const categoryName = normalizeTaskText(category?.name)
+  const title = normalizeTaskText(task?.title)
+  const isAbsenceCategory = ADMIN_ABSENCE_CATEGORY_NAMES.includes(categoryName)
+  const isAbsenceTitle = ADMIN_ABSENCE_CATEGORY_NAMES.includes(title)
+
+  if (isAbsenceCategory || isAbsenceTitle) return true
+  if (isAdminClientName(task?.client_name)) return true
+
+  return false
+}
+
+export const getTaskDurationHours = (task, categories = [], fallbackHours = 0) => {
+  const directHours = Number(task?.duration_hours)
+  if (Number.isFinite(directHours) && directHours > 0) return directHours
+
+  const category = categories.find(cat => Number(cat.id) === Number(task?.category_id))
+  const categoryHours = Number(category?.default_hours)
+  if (Number.isFinite(categoryHours) && categoryHours > 0) return categoryHours
+
+  return fallbackHours
+}
+
 export const getTaskTechnicianIds = (task) => {
   if (!task) return []
   if (Array.isArray(task.technician_ids)) return task.technician_ids.filter(Boolean)

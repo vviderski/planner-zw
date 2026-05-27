@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../supabaseClient'
 import { Plus, X, Save, ChevronLeft, ChevronRight, CalendarDays, Clock, MapPin } from 'lucide-react'
 import TaskSearch from './TaskSearch'
-import { buildTechnicianPayload, getMapsDirectionsUrl, getTaskCardTitle, getTaskEndDate, getTaskMutationErrorMessage, getTaskStartDate, getTaskTechnicianIds } from '../utils/taskUtils'
+import { ADMIN_CLIENT_NAME, buildTechnicianPayload, getMapsDirectionsUrl, getTaskCardTitle, getTaskEndDate, getTaskMutationErrorMessage, getTaskStartDate, getTaskTechnicianIds, isAdminClientName } from '../utils/taskUtils'
 import { getTaskChangeHistoryEntries, logTaskHistory } from '../utils/taskHistory'
 import { notifyTeamsTaskCompleted, notifyTeamsTaskReopened } from '../utils/teamsNotifications'
 
@@ -31,6 +31,8 @@ export default function SchedulerView({ currentUser, currentUserRole = 'technik'
 
   const [filteredCategoriesForForm, setFilteredCategoriesForForm] = useState([])
   const userRole = currentUserRole
+  const adminClient = clients.find(client => isAdminClientName(client.name))
+  const adminCategories = adminClient ? clientCategories.filter(category => Number(category.client_id) === Number(adminClient.id)) : []
 
   const getWeekNumber = (d) => {
     const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()))
@@ -150,7 +152,10 @@ export default function SchedulerView({ currentUser, currentUserRole = 'technik'
     setCategoryId(catId)
     if (catId) {
       const selectedCat = clientCategories.find(c => c.id === Number(catId))
-      if (selectedCat) setDurationHours(selectedCat.default_hours.toString())
+      if (selectedCat) {
+        setDurationHours(selectedCat.default_hours.toString())
+        if (userRole === 'technik' && !selectedTask && !title.trim()) setTitle(selectedCat.name)
+      }
     } else {
       setDurationHours('')
     }
@@ -178,8 +183,9 @@ export default function SchedulerView({ currentUser, currentUserRole = 'technik'
 
   // 🟢 WYWOŁYWANE PRZY KLIKNIĘCIU W KOMÓRKĘ SIATKI
   const handleOpenCreateModal = (dateStr, initialTechId = '') => {
+    setSelectedTask(null)
     setTitle('')
-    setClientId('')
+    setClientId(userRole === 'technik' && adminClient ? adminClient.id.toString() : '')
     setCategoryId('')
     setTicketNumber('')
     setDurationHours('')
@@ -207,12 +213,15 @@ export default function SchedulerView({ currentUser, currentUserRole = 'technik'
     e.preventDefault()
     const technicianTaskPayload = {
       title,
+      client_id: adminClient ? adminClient.id : null,
+      category_id: categoryId ? Number(categoryId) : null,
       description,
       address,
       ...buildTechnicianPayload(currentUser?.id ? [currentUser.id] : []),
       start_date: taskDate,
       end_date: taskDate,
-      client_name: 'Brak',
+      client_name: adminClient ? ADMIN_CLIENT_NAME : 'Brak',
+      duration_hours: durationHours ? Number(durationHours) : null,
       status: 'Do realizacji',
     }
     const pmTaskPayload = {
@@ -562,7 +571,20 @@ export default function SchedulerView({ currentUser, currentUserRole = 'technik'
                 ) : (
                   <>
                     <div><label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Nazwa zadania / opis</label><input type="text" required value={title} onChange={e => setTitle(e.target.value)} className="w-full p-3 border rounded-lg text-base" /></div>
-                    <div className="bg-slate-50 border rounded-lg p-3 text-xs font-semibold text-slate-600">Nowe zadanie zostanie przypisane do Ciebie na dzień {taskDate}.</div>
+                    <div className="grid grid-cols-1 gap-3 rounded-lg border bg-slate-50 p-3">
+                      <div className="text-xs font-semibold text-slate-600">Nowe zadanie zostanie przypisane do Ciebie na dzień {taskDate}.</div>
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">ADM / niedostępność</label>
+                        <select value={categoryId} onChange={e => handleCategoryChange(e.target.value)} disabled={!adminClient} className="w-full rounded-lg border bg-white p-3 text-base">
+                          <option value="">{adminClient ? '-- Brak --' : 'Brak klienta ADM w bazie'}</option>
+                          {adminCategories.map(category => <option key={category.id} value={category.id}>{category.name}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Czas (h)</label>
+                        <input type="number" min="1" value={durationHours} onChange={e => setDurationHours(e.target.value)} className="w-full rounded-lg border bg-white p-3 text-base" />
+                      </div>
+                    </div>
                     <div><label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Miejscowość / lokalizacja</label><textarea value={description} onChange={e => setDescription(e.target.value)} rows="3" className="w-full p-3 border rounded-lg text-base" /></div>
                     <div><label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Adres dojazdu</label><input type="text" value={address} onChange={e => setAddress(e.target.value)} className="w-full p-3 border rounded-lg text-base" placeholder="Ulica, numer, miejscowość" /></div>
                   </>
@@ -739,8 +761,23 @@ export default function SchedulerView({ currentUser, currentUserRole = 'technik'
                 </>
               )}
               {userRole === 'technik' && (
-                <div className="bg-slate-50 border rounded p-2 text-xs font-semibold text-slate-600">
-                  Nowe zadanie zostanie przypisane do Ciebie na dzień {taskDate}.
+                <div className="space-y-3 bg-slate-50 border rounded p-3 text-xs font-semibold text-slate-600">
+                  <div>Nowe zadanie zostanie przypisane do Ciebie na dzień {taskDate}.</div>
+                  {!selectedTask && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">ADM / niedostępność</label>
+                        <select value={categoryId} onChange={e => handleCategoryChange(e.target.value)} disabled={!adminClient} className="w-full p-2 border bg-white rounded text-sm">
+                          <option value="">{adminClient ? '-- Brak --' : 'Brak klienta ADM w bazie'}</option>
+                          {adminCategories.map(category => <option key={category.id} value={category.id}>{category.name}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Czas (h)</label>
+                        <input type="number" min="1" value={durationHours} onChange={e => setDurationHours(e.target.value)} className="w-full p-2 border bg-white rounded text-sm" />
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
               <div><label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">Miejscowość / lokalizacja</label><textarea value={description} onChange={e => setDescription(e.target.value)} rows="2" className="w-full p-2 border rounded text-sm" /></div>
