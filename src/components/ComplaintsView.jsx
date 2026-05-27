@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronLeft, ChevronRight, Download, Eraser, FileWarning, Upload } from 'lucide-react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { ChevronDown, ChevronLeft, ChevronRight, Download, Eraser, FileWarning, Upload } from 'lucide-react'
 import * as XLSX from 'xlsx'
 import { supabase } from '../supabaseClient'
 import { formatDateLocal, getIsoWeekNumber, getTaskTechnicianIds } from '../utils/taskUtils'
@@ -98,6 +98,7 @@ export default function ComplaintsView() {
   })
   const [dateTo, setDateTo] = useState(() => formatDateLocal(new Date()))
   const [message, setMessage] = useState('')
+  const [expandedTechnicians, setExpandedTechnicians] = useState({})
   const fileInputRef = useRef(null)
 
   useEffect(() => {
@@ -347,6 +348,13 @@ export default function ComplaintsView() {
     XLSX.writeFile(workbook, `Reklamacje_${dateFrom}_${dateTo}.xlsx`)
   }
 
+  const toggleTechnicianDetails = (technicianName) => {
+    setExpandedTechnicians(prev => ({
+      ...prev,
+      [technicianName]: !prev[technicianName],
+    }))
+  }
+
   return (
     <div className="space-y-6">
       <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-md">
@@ -436,14 +444,30 @@ export default function ComplaintsView() {
               <tr><th className="p-3">Technik / nr ticketu</th><th className="p-3">Ilosc / opis</th><th className="p-3">Klienci / klient</th></tr>
             </thead>
             <tbody className="divide-y">
-              {technicianRows.slice(0, 20).map(row => (
-                <>
-                  <tr key={row.technicianName} className="bg-slate-50">
-                    <td className="p-3 font-black text-slate-900">{row.technicianName}</td>
+              {technicianRows.slice(0, 20).map(row => {
+                const isExpanded = Boolean(expandedTechnicians[row.technicianName])
+
+                return (
+                <Fragment key={row.technicianName}>
+                  <tr className="cursor-pointer bg-slate-50 hover:bg-slate-100" onClick={() => toggleTechnicianDetails(row.technicianName)}>
+                    <td className="p-3 font-black text-slate-900">
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-2 text-left font-black text-slate-900"
+                        aria-expanded={isExpanded}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          toggleTechnicianDetails(row.technicianName)
+                        }}
+                      >
+                        {isExpanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+                        <span>{row.technicianName}</span>
+                      </button>
+                    </td>
                     <td className="p-3 font-black text-slate-900">{row.total}</td>
                     <td className="p-3 font-bold text-slate-500">{row.clients}</td>
                   </tr>
-                  {row.complaints.slice(0, 25).map(({ complaint, clientName }) => (
+                  {isExpanded && row.complaints.slice(0, 25).map(({ complaint, clientName }) => (
                     <tr key={`${row.technicianName}-${complaint.id}`} className="bg-white">
                       <td className="p-3 pl-8 font-black">
                         <a href={getServiceDeskTicketUrl(complaint.ticket_id)} target="_blank" rel="noreferrer" className="text-blue-700 underline decoration-blue-300 underline-offset-2 hover:text-blue-900">
@@ -457,13 +481,14 @@ export default function ComplaintsView() {
                       <td className="p-3 font-bold text-slate-500">{clientName}</td>
                     </tr>
                   ))}
-                  {row.complaints.length > 25 && (
+                  {isExpanded && row.complaints.length > 25 && (
                     <tr key={`${row.technicianName}-more`}>
                       <td colSpan="3" className="bg-white p-3 pl-8 text-xs font-bold text-slate-400">Pokazano 25 z {row.complaints.length} reklamacji dla tej osoby.</td>
                     </tr>
                   )}
-                </>
-              ))}
+                </Fragment>
+                )
+              })}
               {technicianRows.length === 0 && <tr><td colSpan="3" className="p-6 text-center font-bold text-slate-400">Brak danych w zakresie.</td></tr>}
             </tbody>
           </table>
