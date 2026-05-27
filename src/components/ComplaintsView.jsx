@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Download, Eraser, FileWarning, Upload } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Download, Eraser, FileWarning, Upload } from 'lucide-react'
 import * as XLSX from 'xlsx'
 import { supabase } from '../supabaseClient'
 import { formatDateLocal, getIsoWeekNumber, getTaskTechnicianIds } from '../utils/taskUtils'
@@ -12,6 +12,8 @@ const normalizeText = (value) => String(value || '')
   .trim()
 
 const ticketKey = (value) => String(value || '').replace(/\D/g, '')
+
+const getServiceDeskTicketUrl = (ticketId) => `https://servicedeskv5.exorigo-upos.pl/tickets/${encodeURIComponent(ticketId)}`
 
 const getFirstValue = (row, keys) => {
   for (const key of keys) {
@@ -37,6 +39,17 @@ const parseDateValue = (value) => {
 }
 
 const toDate = (dateStr) => new Date(`${dateStr}T12:00:00`)
+
+const getMonthValue = (dateStr) => String(dateStr || '').slice(0, 7)
+
+const getMonthRange = (monthValue) => {
+  const [year, month] = String(monthValue || '').split('-').map(Number)
+  if (!year || !month) return null
+  return {
+    start: formatDateLocal(new Date(year, month - 1, 1)),
+    end: formatDateLocal(new Date(year, month, 0)),
+  }
+}
 
 const getWeekStart = (dateStr) => {
   const date = toDate(dateStr)
@@ -178,12 +191,17 @@ export default function ComplaintsView() {
       .filter(Boolean) : ['Brak przypisanego zadania']
     const finalNames = names.length ? names : ['Brak technika']
     finalNames.forEach(name => {
-      if (!acc[name]) acc[name] = { technicianName: name, total: 0, clients: new Set() }
+      if (!acc[name]) acc[name] = { technicianName: name, total: 0, clients: new Set(), complaints: [] }
       acc[name].total += 1
       acc[name].clients.add(item.clientName)
+      acc[name].complaints.push(item)
     })
     return acc
-  }, {})).map(row => ({ ...row, clients: [...row.clients].join(', ') })).sort((a, b) => b.total - a.total)
+  }, {})).map(row => ({
+    ...row,
+    clients: [...row.clients].join(', '),
+    complaints: row.complaints.sort((a, b) => String(b.complaint.complaint_date || '').localeCompare(String(a.complaint.complaint_date || ''))),
+  })).sort((a, b) => b.total - a.total)
 
   const unmatchedRows = enrichedComplaints.filter(item => !item.task)
   const matchedCount = enrichedComplaints.length - unmatchedRows.length
@@ -280,6 +298,20 @@ export default function ComplaintsView() {
     setMessage(`Usunieto wszystkie reklamacje: ${complaints.length}.`)
   }
 
+  const handleSelectMonth = (monthValue) => {
+    const range = getMonthRange(monthValue)
+    if (!range) return
+    setDateFrom(range.start)
+    setDateTo(range.end)
+  }
+
+  const shiftMonth = (direction) => {
+    const baseMonth = getMonthValue(dateFrom || dateTo || formatDateLocal(new Date()))
+    const [year, month] = baseMonth.split('-').map(Number)
+    const nextDate = new Date(year, month - 1 + direction, 1)
+    handleSelectMonth(`${nextDate.getFullYear()}-${String(nextDate.getMonth() + 1).padStart(2, '0')}`)
+  }
+
   const handleExport = () => {
     const summaryRows = weeklyRows.map(row => ({
       'Tydzien roku': row.weekNumber,
@@ -327,6 +359,13 @@ export default function ComplaintsView() {
             <p className="text-sm font-semibold text-slate-500">Import z Service Desk i analiza reklamacji po tygodniach, klientach oraz technikach.</p>
           </div>
           <div className="flex flex-wrap items-end gap-2">
+            <button type="button" onClick={() => shiftMonth(-1)} className="rounded-lg bg-slate-100 p-2 text-slate-700 transition hover:bg-slate-200" title="Poprzedni miesiac">
+              <ChevronLeft size={17} />
+            </button>
+            <label className="text-xs font-bold text-slate-600">Miesiac<input type="month" value={getMonthValue(dateFrom)} onChange={e => handleSelectMonth(e.target.value)} className="mt-1 block rounded-lg border px-3 py-2 text-xs font-black" /></label>
+            <button type="button" onClick={() => shiftMonth(1)} className="rounded-lg bg-slate-100 p-2 text-slate-700 transition hover:bg-slate-200" title="Nastepny miesiac">
+              <ChevronRight size={17} />
+            </button>
             <label className="text-xs font-bold text-slate-600">Od<input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="mt-1 block rounded-lg border px-3 py-2 text-xs font-bold" /></label>
             <label className="text-xs font-bold text-slate-600">Do<input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="mt-1 block rounded-lg border px-3 py-2 text-xs font-bold" /></label>
             <input ref={fileInputRef} type="file" accept=".xlsx,.xls" onChange={handleImport} className="hidden" />
@@ -394,11 +433,36 @@ export default function ComplaintsView() {
         <div className="overflow-x-auto">
           <table className="min-w-full text-left text-xs">
             <thead className="bg-slate-100 text-slate-600">
-              <tr><th className="p-3">Technik</th><th className="p-3">Ilosc reklamacji</th><th className="p-3">Klienci</th></tr>
+              <tr><th className="p-3">Technik / nr ticketu</th><th className="p-3">Ilosc / opis</th><th className="p-3">Klienci / klient</th></tr>
             </thead>
             <tbody className="divide-y">
               {technicianRows.slice(0, 20).map(row => (
-                <tr key={row.technicianName}><td className="p-3 font-bold">{row.technicianName}</td><td className="p-3 font-black">{row.total}</td><td className="p-3 text-slate-500">{row.clients}</td></tr>
+                <>
+                  <tr key={row.technicianName} className="bg-slate-50">
+                    <td className="p-3 font-black text-slate-900">{row.technicianName}</td>
+                    <td className="p-3 font-black text-slate-900">{row.total}</td>
+                    <td className="p-3 font-bold text-slate-500">{row.clients}</td>
+                  </tr>
+                  {row.complaints.slice(0, 25).map(({ complaint, clientName }) => (
+                    <tr key={`${row.technicianName}-${complaint.id}`} className="bg-white">
+                      <td className="p-3 pl-8 font-black">
+                        <a href={getServiceDeskTicketUrl(complaint.ticket_id)} target="_blank" rel="noreferrer" className="text-blue-700 underline decoration-blue-300 underline-offset-2 hover:text-blue-900">
+                          {complaint.ticket_id}
+                        </a>
+                      </td>
+                      <td className="p-3 max-w-2xl text-slate-600">
+                        <div className="truncate font-semibold">{complaint.description || complaint.category || 'Brak opisu'}</div>
+                        {complaint.category && <div className="mt-0.5 text-[11px] font-bold text-slate-400">{complaint.category}</div>}
+                      </td>
+                      <td className="p-3 font-bold text-slate-500">{clientName}</td>
+                    </tr>
+                  ))}
+                  {row.complaints.length > 25 && (
+                    <tr key={`${row.technicianName}-more`}>
+                      <td colSpan="3" className="bg-white p-3 pl-8 text-xs font-bold text-slate-400">Pokazano 25 z {row.complaints.length} reklamacji dla tej osoby.</td>
+                    </tr>
+                  )}
+                </>
               ))}
               {technicianRows.length === 0 && <tr><td colSpan="3" className="p-6 text-center font-bold text-slate-400">Brak danych w zakresie.</td></tr>}
             </tbody>

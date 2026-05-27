@@ -16,6 +16,54 @@ const formatNumber = (value) => Number(value || 0).toLocaleString('pl-PL', { max
 
 const taskCoversDate = (task, dateStr) => getTaskStartDate(task) <= dateStr && getTaskEndDate(task) >= dateStr
 
+const addDays = (date, days) => {
+  const next = new Date(date)
+  next.setDate(next.getDate() + days)
+  return next
+}
+
+const getEasterDate = (year) => {
+  const a = year % 19
+  const b = Math.floor(year / 100)
+  const c = year % 100
+  const d = Math.floor(b / 4)
+  const e = b % 4
+  const f = Math.floor((b + 8) / 25)
+  const g = Math.floor((b - f + 1) / 3)
+  const h = (19 * a + b - d - g + 15) % 30
+  const i = Math.floor(c / 4)
+  const k = c % 4
+  const l = (32 + 2 * e + 2 * i - h - k) % 7
+  const m = Math.floor((a + 11 * h + 22 * l) / 451)
+  const month = Math.floor((h + l - 7 * m + 114) / 31)
+  const day = ((h + l - 7 * m + 114) % 31) + 1
+  return new Date(year, month - 1, day)
+}
+
+const getPolishHolidaySet = (year) => {
+  const easter = getEasterDate(year)
+  return new Set([
+    `${year}-01-01`,
+    `${year}-01-06`,
+    formatDateLocal(addDays(easter, 1)),
+    `${year}-05-01`,
+    `${year}-05-03`,
+    formatDateLocal(addDays(easter, 60)),
+    `${year}-08-15`,
+    `${year}-11-01`,
+    `${year}-11-11`,
+    `${year}-12-25`,
+    `${year}-12-26`,
+  ])
+}
+
+const isWorkingDay = (dateStr) => {
+  const date = new Date(`${dateStr}T12:00:00`)
+  const day = date.getDay()
+  if (day === 0 || day === 6) return false
+  return !getPolishHolidaySet(date.getFullYear()).has(dateStr)
+}
+
 const getDateRange = (startDate, endDate) => {
   const days = []
   const cursor = new Date(`${startDate}T12:00:00`)
@@ -42,6 +90,7 @@ const getWeekEnd = (weekStart) => {
 
 export default function DashboardZw() {
   const [tasks, setTasks] = useState([])
+  const [technicians, setTechnicians] = useState([])
   const [clientCategories, setClientCategories] = useState([])
   const [complaints, setComplaints] = useState([])
   const [complaintsMessage, setComplaintsMessage] = useState('')
@@ -70,13 +119,15 @@ export default function DashboardZw() {
   }, [])
 
   const fetchData = async () => {
-    const [{ data: tasksData }, { data: categoriesData }, { data: complaintsData, error: complaintsError }] = await Promise.all([
+    const [{ data: tasksData }, { data: techniciansData }, { data: categoriesData }, { data: complaintsData, error: complaintsError }] = await Promise.all([
       supabase.from('tasks').select('*'),
+      supabase.from('profiles').select('*').eq('role', 'technik').order('full_name', { ascending: true }),
       supabase.from('client_categories').select('*'),
       supabase.from('complaints').select('*'),
     ])
 
     if (tasksData) setTasks(tasksData)
+    if (techniciansData) setTechnicians(techniciansData)
     if (categoriesData) setClientCategories(categoriesData)
     if (complaintsError) {
       setComplaints([])
@@ -94,6 +145,7 @@ export default function DashboardZw() {
 
     const calculateRangeStats = (rangeStart, rangeEnd) => {
       const rangeDays = getDateRange(rangeStart, rangeEnd)
+      const workingDays = rangeDays.filter(isWorkingDay)
       const rangeTasks = tasks.filter(task => getTaskStartDate(task) <= rangeEnd && getTaskEndDate(task) >= rangeStart)
       const workloadTasks = rangeTasks.filter(task => !isAdminAvailabilityTask(task, clientCategories))
       const adminTasks = rangeTasks.filter(task => isAdminAvailabilityTask(task, clientCategories))
@@ -104,7 +156,7 @@ export default function DashboardZw() {
       workloadTasks.forEach(task => {
         getTaskTechnicianIds(task).forEach(technicianId => {
           rangeDays.forEach(dateStr => {
-            if (taskCoversDate(task, dateStr)) workedPersonDays.add(`${technicianId}|${dateStr}`)
+            if (taskCoversDate(task, dateStr) && isWorkingDay(dateStr)) workedPersonDays.add(`${technicianId}|${dateStr}`)
           })
         })
       })
@@ -112,7 +164,7 @@ export default function DashboardZw() {
       adminTasks.forEach(task => {
         getTaskTechnicianIds(task).forEach(technicianId => {
           rangeDays.forEach(dateStr => {
-            if (taskCoversDate(task, dateStr)) adminPersonDays.add(`${technicianId}|${dateStr}`)
+            if (taskCoversDate(task, dateStr) && isWorkingDay(dateStr)) adminPersonDays.add(`${technicianId}|${dateStr}`)
           })
         })
       })
@@ -122,17 +174,21 @@ export default function DashboardZw() {
       const complaintCount = complaintsInRange.length
       const productivePersonDays = workedPersonDays.size
       const adminPersonDayCount = adminPersonDays.size
-      const totalPersonDays = productivePersonDays + adminPersonDayCount
+      const allPersonDays = technicians.length * workingDays.length
+      const availablePersonDays = Math.max(0, allPersonDays - adminPersonDayCount)
 
       return {
         taskCount,
         adminTaskCount: adminTasks.length,
         personDays: productivePersonDays,
         adminPersonDays: adminPersonDayCount,
+        allPersonDays,
+        availablePersonDays,
+        availableEfficiency: allPersonDays > 0 ? (availablePersonDays / allPersonDays) * 100 : 0,
         durationHours,
         complaintCount,
         complaintRatio: taskCount > 0 ? (complaintCount / taskCount) * 100 : 0,
-        teamEfficiency: totalPersonDays > 0 ? (productivePersonDays / totalPersonDays) * 100 : 0,
+        teamEfficiency: productivePersonDays > 0 ? (availablePersonDays / productivePersonDays) * 100 : 0,
         workloadTasks,
         complaintsInRange,
       }
@@ -183,6 +239,9 @@ export default function DashboardZw() {
       personDays: monthRangeStats.personDays,
       adminTaskCount: monthRangeStats.adminTaskCount,
       adminPersonDays: monthRangeStats.adminPersonDays,
+      allPersonDays: monthRangeStats.allPersonDays,
+      availablePersonDays: monthRangeStats.availablePersonDays,
+      availableEfficiency: monthRangeStats.availableEfficiency,
       teamEfficiency: monthRangeStats.teamEfficiency,
       durationHours: monthRangeStats.durationHours,
       complaintCount: monthRangeStats.complaintCount,
@@ -191,7 +250,7 @@ export default function DashboardZw() {
       complaintClientCounts,
       weekRows,
     }
-  }, [clientCategories, complaints, currentMonth, tasks])
+  }, [clientCategories, complaints, currentMonth, tasks, technicians.length])
 
   const shiftMonth = (direction) => {
     const [year, month] = currentMonth.split('-').map(Number)
@@ -201,8 +260,9 @@ export default function DashboardZw() {
 
   const kpis = [
     { label: 'Ilosc zadan', value: stats.taskCount, hint: `${stats.monthStart} - ${stats.monthEnd}`, icon: CalendarDays, color: 'text-blue-700', bg: 'bg-blue-50' },
-    { label: 'Osobodniowki', value: stats.personDays, hint: `ADM: ${stats.adminTaskCount} zadan / ${stats.adminPersonDays} OSD`, icon: Users, color: 'text-emerald-700', bg: 'bg-emerald-50' },
-    { label: 'Efektywnosc zespolu', value: `${formatNumber(stats.teamEfficiency)}%`, hint: 'OSD zadaniowe / OSD razem z ADM', icon: Gauge, color: stats.teamEfficiency < 80 ? 'text-orange-700' : 'text-emerald-700', bg: stats.teamEfficiency < 80 ? 'bg-orange-50' : 'bg-emerald-50' },
+    { label: 'Osobodniowki', value: stats.personDays, hint: `Dostepne: ${formatNumber(stats.availablePersonDays)} / ${formatNumber(stats.allPersonDays)} OSD, ADM: ${stats.adminTaskCount} zadan`, icon: Users, color: 'text-emerald-700', bg: 'bg-emerald-50' },
+    { label: 'Dostepnosc ZW', value: `${formatNumber(stats.availableEfficiency)}%`, hint: 'Dostepne OSD / wszystkie OSD', icon: Gauge, color: stats.availableEfficiency < 80 ? 'text-orange-700' : 'text-emerald-700', bg: stats.availableEfficiency < 80 ? 'bg-orange-50' : 'bg-emerald-50' },
+    { label: 'Efektywnosc zespolu', value: `${formatNumber(stats.teamEfficiency)}%`, hint: 'Dostepne OSD / przepracowane OSD', icon: Gauge, color: stats.teamEfficiency > 120 ? 'text-orange-700' : 'text-emerald-700', bg: stats.teamEfficiency > 120 ? 'bg-orange-50' : 'bg-emerald-50' },
     { label: 'Czasochlonnosc', value: `${formatNumber(stats.durationHours)}h`, hint: 'Brak czasu = 8h', icon: Clock, color: 'text-indigo-700', bg: 'bg-indigo-50' },
     { label: 'Reklamacje', value: stats.complaintCount, hint: 'Z importu Service Desk', icon: AlertTriangle, color: 'text-orange-700', bg: 'bg-orange-50' },
     { label: 'Reklamacje / zadania', value: `${formatNumber(stats.complaintRatio)}%`, hint: 'Im mniej, tym lepiej', icon: Gauge, color: stats.complaintRatio > 10 ? 'text-red-700' : 'text-slate-900', bg: stats.complaintRatio > 10 ? 'bg-red-50' : 'bg-slate-50' },
@@ -235,7 +295,7 @@ export default function DashboardZw() {
         {complaintsMessage && <div className="mt-4 rounded-lg border border-orange-200 bg-orange-50 p-3 text-xs font-bold text-orange-800">{complaintsMessage}</div>}
       </div>
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-6">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-7">
         {kpis.map(item => {
           const Icon = item.icon
           return (
@@ -264,6 +324,8 @@ export default function DashboardZw() {
                 <th className="p-3">Zakres</th>
                 <th className="p-3">Ilosc zadan</th>
                 <th className="p-3">Przepracowane OSD</th>
+                <th className="p-3">Dostepne / wszystkie OSD</th>
+                <th className="p-3">Dostepnosc ZW</th>
                 <th className="p-3">Efektywnosc zespolu</th>
                 <th className="p-3">Czasochlonnosc</th>
                 <th className="p-3">Reklamacje</th>
@@ -277,14 +339,16 @@ export default function DashboardZw() {
                   <td className="p-3 font-bold text-slate-500">{row.weekStart} - {row.weekEnd}</td>
                   <td className="p-3 font-black text-blue-700">{row.taskCount}</td>
                   <td className="p-3 font-black text-emerald-700">{row.personDays}</td>
-                  <td className={`p-3 font-black ${row.teamEfficiency < 80 ? 'text-orange-700' : 'text-emerald-700'}`}>{formatNumber(row.teamEfficiency)}%</td>
+                  <td className="p-3 font-black text-slate-700">{formatNumber(row.availablePersonDays)} / {formatNumber(row.allPersonDays)}</td>
+                  <td className={`p-3 font-black ${row.availableEfficiency < 80 ? 'text-orange-700' : 'text-emerald-700'}`}>{formatNumber(row.availableEfficiency)}%</td>
+                  <td className={`p-3 font-black ${row.teamEfficiency > 120 ? 'text-orange-700' : 'text-emerald-700'}`}>{formatNumber(row.teamEfficiency)}%</td>
                   <td className="p-3 font-black text-indigo-700">{formatNumber(row.durationHours)}h</td>
                   <td className="p-3 font-black text-orange-700">{row.complaintCount}</td>
                   <td className={`p-3 font-black ${row.complaintRatio > 10 ? 'text-red-700' : 'text-slate-700'}`}>{formatNumber(row.complaintRatio)}%</td>
                 </tr>
               ))}
               {stats.weekRows.length === 0 && (
-                <tr><td colSpan="8" className="p-6 text-center text-sm font-bold text-slate-400">Brak danych tygodniowych.</td></tr>
+                <tr><td colSpan="10" className="p-6 text-center text-sm font-bold text-slate-400">Brak danych tygodniowych.</td></tr>
               )}
             </tbody>
           </table>
